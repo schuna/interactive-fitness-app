@@ -10,6 +10,7 @@ import com.google.android.gms.tasks.Task
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.AuthResult
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
 import com.openai.interactivefitness.domain.WorkoutSession
 import kotlin.coroutines.resume
@@ -28,6 +29,9 @@ enum class FirebaseSyncStatus {
     FAILED,
 }
 
+class GoogleSignInRequiredException :
+    IllegalStateException("Google sign-in is required for cloud sync")
+
 class FirebaseSyncService private constructor(
     app: FirebaseApp,
 ) {
@@ -35,9 +39,34 @@ class FirebaseSyncService private constructor(
     private val auth = FirebaseAuth.getInstance(app)
     private val firestore = FirebaseFirestore.getInstance(app)
     private val mutableStatus = MutableStateFlow(
-        if (auth.currentUser == null) FirebaseSyncStatus.SIGNED_OUT else FirebaseSyncStatus.READY,
+        if (auth.currentUser?.isAnonymous == false) {
+            FirebaseSyncStatus.READY
+        } else {
+            FirebaseSyncStatus.SIGNED_OUT
+        },
     )
     val status: StateFlow<FirebaseSyncStatus> = mutableStatus.asStateFlow()
+
+    init {
+        if (auth.currentUser?.isAnonymous == true) auth.signOut()
+    }
+
+    suspend fun signInWithGoogle(idToken: String) {
+        mutableStatus.value = FirebaseSyncStatus.AUTHENTICATING
+        runCatching {
+            auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null))
+                .awaitResult<AuthResult>()
+        }.onSuccess {
+            mutableStatus.value = FirebaseSyncStatus.READY
+        }.onFailure {
+            mutableStatus.value = FirebaseSyncStatus.SIGNED_OUT
+        }.getOrThrow()
+    }
+
+    fun signOut() {
+        auth.signOut()
+        mutableStatus.value = FirebaseSyncStatus.SIGNED_OUT
+    }
 
     fun scheduleRetry() {
         val request = OneTimeWorkRequestBuilder<FirebaseSyncWorker>()
@@ -96,18 +125,10 @@ class FirebaseSyncService private constructor(
     }
 
     private suspend fun ensureAuthenticated(): String {
-        auth.currentUser?.uid?.let { return it }
-        mutableStatus.value = FirebaseSyncStatus.AUTHENTICATING
-        return runCatching {
-            auth.signInAnonymously().awaitResult<AuthResult>()
-                .user
-                ?.uid
-                ?: error("Anonymous authentication returned no user")
-        }.onSuccess {
-            mutableStatus.value = FirebaseSyncStatus.READY
-        }.onFailure {
-            mutableStatus.value = FirebaseSyncStatus.FAILED
-        }.getOrThrow()
+        val user = auth.currentUser
+        if (user != null && !user.isAnonymous) return user.uid
+        mutableStatus.value = FirebaseSyncStatus.SIGNED_OUT
+        throw GoogleSignInRequiredException()
     }
 
     companion object {

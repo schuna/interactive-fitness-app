@@ -2,6 +2,7 @@ package com.openai.interactivefitness.ui
 
 import android.content.Intent
 import android.net.Uri
+import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -56,9 +57,12 @@ import com.openai.interactivefitness.FitnessApplication
 import com.openai.interactivefitness.BuildConfig
 import com.openai.interactivefitness.data.HealthConnectManager
 import com.openai.interactivefitness.data.HealthConnectStatus
+import com.openai.interactivefitness.data.GoogleSignInManager
 import androidx.health.connect.client.PermissionController
 import com.openai.interactivefitness.domain.Recommendation
 import com.openai.interactivefitness.domain.ActiveWorkout
+import com.openai.interactivefitness.domain.ConversationEngine
+import com.openai.interactivefitness.domain.ConversationIntent
 import com.openai.interactivefitness.domain.StrengthSet
 import com.openai.interactivefitness.domain.WeeklySummary
 import com.openai.interactivefitness.domain.WorkoutDraft
@@ -82,20 +86,34 @@ fun FitnessApp() {
     val context = LocalContext.current
     val application = context.applicationContext as FitnessApplication
     val healthConnectManager = remember { HealthConnectManager(context) }
+    val googleSignInManager = remember {
+        GoogleSignInManager(context as Activity)
+    }
     var healthConnectStatus by remember {
         mutableStateOf(HealthConnectStatus.PERMISSION_REQUIRED)
     }
+    var extendedHealthPermissions by remember { mutableStateOf(emptySet<String>()) }
+    var hasExtendedHealthPermissions by remember { mutableStateOf(false) }
     val healthPermissionLauncher = rememberLauncherForActivityResult(
         PermissionController.createRequestPermissionResultContract(),
     ) {
-        healthConnectStatus = if (it.containsAll(healthConnectManager.permissions)) {
-            HealthConnectStatus.READY
-        } else {
-            HealthConnectStatus.PERMISSION_REQUIRED
+        if (healthConnectStatus != HealthConnectStatus.READY) {
+            healthConnectStatus = if (it.containsAll(healthConnectManager.permissions)) {
+                HealthConnectStatus.READY
+            } else {
+                HealthConnectStatus.PERMISSION_REQUIRED
+            }
         }
+        hasExtendedHealthPermissions =
+            extendedHealthPermissions.isEmpty() ||
+                it.containsAll(extendedHealthPermissions)
+        if (hasExtendedHealthPermissions) healthConnectManager.scheduleBackgroundSync()
     }
     LaunchedEffect(Unit) {
         healthConnectStatus = healthConnectManager.status()
+        extendedHealthPermissions = healthConnectManager.extendedPermissions()
+        hasExtendedHealthPermissions =
+            healthConnectManager.hasPermissions(extendedHealthPermissions)
     }
     val viewModel: FitnessViewModel = viewModel(
         factory = FitnessViewModel.factory(
@@ -146,7 +164,17 @@ fun FitnessApp() {
             onCompleteStep = viewModel::completeCurrentStep,
             onSkipRest = viewModel::skipRest,
             onAdjustRest = viewModel::adjustRest,
-            onFinish = { viewModel.finishActiveWorkout(healthConnectManager) },
+            onFinish = {
+                viewModel.finishActiveWorkout(
+                    healthConnectManager.takeIf {
+                        state.firebaseSyncStatus in setOf(
+                            com.openai.interactivefitness.data.FirebaseSyncStatus.READY,
+                            com.openai.interactivefitness.data.FirebaseSyncStatus.SYNCING,
+                            com.openai.interactivefitness.data.FirebaseSyncStatus.FAILED,
+                        )
+                    },
+                )
+            },
             onCancel = viewModel::cancelActiveWorkout,
         )
         return
@@ -170,8 +198,17 @@ fun FitnessApp() {
             when (selected.value) {
                 Destination.TODAY -> TodayScreen(
                     state = state,
+                    onGoogleSignIn = {
+                        viewModel.signInWithGoogle(googleSignInManager)
+                    },
+                    onSignOut = viewModel::signOut,
                     healthConnectStatus = healthConnectStatus,
                     healthConnectImportMessage = state.healthConnectImportMessage,
+                    hasExtendedHealthPermissions = hasExtendedHealthPermissions,
+                    hasExtendedHealthPermissionSupport = extendedHealthPermissions.isNotEmpty(),
+                    onExtendedHealthPermissions = {
+                        healthPermissionLauncher.launch(extendedHealthPermissions)
+                    },
                     onHealthConnectImport = {
                         viewModel.importHealthConnect(healthConnectManager)
                     },
@@ -206,12 +243,24 @@ fun FitnessApp() {
                     onQuickWorkout = viewModel::addQuickWorkout,
                     onStart = viewModel::startRecommendation,
                     isCompleted = state.isTodayRecommendationCompleted,
+                    onNavigate = { selected.value = it },
                 )
-                Destination.DASHBOARD -> DashboardScreen(state.weeklySummary)
+                Destination.DASHBOARD -> DashboardScreen(
+                    state.weeklySummary,
+                    state.healthConnectSummary,
+                )
                 Destination.HISTORY -> HistoryScreen(
                     workouts = state.workouts,
                     onSave = viewModel::saveWorkout,
-                    onDelete = viewModel::deleteWorkout,
+                    onDelete = {
+                        viewModel.deleteWorkout(
+                            it,
+                            healthConnectManager.takeIf {
+                                state.firebaseSyncStatus !=
+                                    com.openai.interactivefitness.data.FirebaseSyncStatus.SIGNED_OUT
+                            },
+                        )
+                    },
                 )
             }
         }
@@ -221,8 +270,13 @@ fun FitnessApp() {
 @Composable
 private fun TodayScreen(
     state: FitnessUiState,
+    onGoogleSignIn: () -> Unit,
+    onSignOut: () -> Unit,
     healthConnectStatus: HealthConnectStatus,
     healthConnectImportMessage: String?,
+    hasExtendedHealthPermissions: Boolean,
+    hasExtendedHealthPermissionSupport: Boolean,
+    onExtendedHealthPermissions: () -> Unit,
     onHealthConnectAction: () -> Unit,
     onHealthConnectImport: () -> Unit,
     onFatigueChanged: (Int) -> Unit,
@@ -262,12 +316,29 @@ private fun TodayScreen(
             )
         }
         item {
-            HealthConnectCard(
-                status = healthConnectStatus,
-                importMessage = healthConnectImportMessage,
-                onAction = onHealthConnectAction,
-                onImport = onHealthConnectImport,
+            AccountCard(
+                firebaseStatus = state.firebaseSyncStatus,
+                onGoogleSignIn = onGoogleSignIn,
+                onSignOut = onSignOut,
             )
+        }
+        if (state.firebaseSyncStatus in setOf(
+                com.openai.interactivefitness.data.FirebaseSyncStatus.READY,
+                com.openai.interactivefitness.data.FirebaseSyncStatus.SYNCING,
+                com.openai.interactivefitness.data.FirebaseSyncStatus.FAILED,
+            )
+        ) {
+            item {
+                HealthConnectCard(
+                    status = healthConnectStatus,
+                    importMessage = healthConnectImportMessage,
+                    hasExtendedPermissions = hasExtendedHealthPermissions,
+                    hasExtendedPermissionSupport = hasExtendedHealthPermissionSupport,
+                    onExtendedPermissions = onExtendedHealthPermissions,
+                    onAction = onHealthConnectAction,
+                    onImport = onHealthConnectImport,
+                )
+            }
         }
         item {
             state.recommendation?.let {
@@ -279,9 +350,45 @@ private fun TodayScreen(
 }
 
 @Composable
+private fun AccountCard(
+    firebaseStatus: com.openai.interactivefitness.data.FirebaseSyncStatus,
+    onGoogleSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+) {
+    val signedIn = firebaseStatus in setOf(
+        com.openai.interactivefitness.data.FirebaseSyncStatus.READY,
+        com.openai.interactivefitness.data.FirebaseSyncStatus.SYNCING,
+        com.openai.interactivefitness.data.FirebaseSyncStatus.FAILED,
+    )
+    Card {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("계정 및 저장 방식", style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (signedIn) {
+                    "Google 계정 로그인 · 전체 기능 사용"
+                } else {
+                    "익명 사용 · 이 기기의 Room에만 저장"
+                },
+            )
+            if (signedIn) {
+                TextButton(onClick = onSignOut) { Text("로그아웃") }
+            } else {
+                Button(onClick = onGoogleSignIn) { Text("Google 계정으로 로그인") }
+            }
+        }
+    }
+}
+
+@Composable
 private fun HealthConnectCard(
     status: HealthConnectStatus,
     importMessage: String?,
+    hasExtendedPermissions: Boolean,
+    hasExtendedPermissionSupport: Boolean,
+    onExtendedPermissions: () -> Unit,
     onAction: () -> Unit,
     onImport: () -> Unit,
 ) {
@@ -311,6 +418,21 @@ private fun HealthConnectCard(
                 HealthConnectStatus.READY ->
                     Button(onClick = onImport) { Text("최근 운동 가져오기") }
                 else -> Unit
+            }
+            if (
+                status == HealthConnectStatus.READY &&
+                hasExtendedPermissionSupport &&
+                !hasExtendedPermissions
+            ) {
+                TextButton(onClick = onExtendedPermissions) {
+                    Text("과거·백그라운드 권한 설정")
+                }
+            }
+            if (status == HealthConnectStatus.READY && hasExtendedPermissions) {
+                Text(
+                    "백그라운드 동기화 사용 가능",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             importMessage?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall)
@@ -463,12 +585,55 @@ private fun ChatScreen(
     onQuickWorkout: (WorkoutType) -> Unit,
     onStart: () -> Unit,
     isCompleted: Boolean,
+    onNavigate: (Destination) -> Unit,
 ) {
+    val conversationEngine = remember { ConversationEngine() }
+    var input by remember { mutableStateOf("") }
+    var reply by remember {
+        mutableStateOf("메뉴 또는 원하는 작업을 입력해 주세요.")
+    }
+
+    fun submit() {
+        val result = conversationEngine.interpret(input)
+        reply = result.reply
+        when (val intent = result.intent) {
+            ConversationIntent.RecommendToday -> Unit
+            ConversationIntent.ShowDashboard -> onNavigate(Destination.DASHBOARD)
+            ConversationIntent.ShowHistory -> onNavigate(Destination.HISTORY)
+            is ConversationIntent.QuickLog -> onQuickWorkout(intent.type)
+            ConversationIntent.ShowMenu,
+            is ConversationIntent.Unknown,
+            -> Unit
+        }
+        input = ""
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Text("무엇을 도와드릴까요?", style = MaterialTheme.typography.headlineMedium) }
+        item {
+            Card {
+                Column(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(reply)
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        label = { Text("메시지") },
+                        placeholder = { Text("예: 오늘 운동 추천") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    Button(onClick = ::submit, modifier = Modifier.fillMaxWidth()) {
+                        Text("보내기")
+                    }
+                }
+            }
+        }
         item {
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -495,7 +660,7 @@ private fun ChatScreen(
         }
         item {
             Text(
-                "현재는 검증 가능한 메뉴 명령만 제공합니다. 자유 텍스트 해석은 서버 계층 연결 후 추가합니다.",
+                "입력은 검증 가능한 앱 명령으로 변환됩니다. 불명확한 문장은 실행하지 않습니다.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -503,7 +668,10 @@ private fun ChatScreen(
 }
 
 @Composable
-private fun DashboardScreen(summary: WeeklySummary) {
+private fun DashboardScreen(
+    summary: WeeklySummary,
+    healthSummary: com.openai.interactivefitness.data.HealthConnectSummary,
+) {
     Column(
         modifier = Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -517,6 +685,21 @@ private fun DashboardScreen(summary: WeeklySummary) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text("주 4회 목표 ${(summary.goalProgress * 100).toInt()}%")
+                Text(
+                    "활동 ${summary.activeDays}일 · 연속 ${summary.currentStreakDays}일",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+        Card {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Health Connect 최근 7일", style = MaterialTheme.typography.titleMedium)
+                Text("걸음 ${healthSummary.steps}보")
+                Text("거리 ${"%.1f".format(healthSummary.distanceMeters / 1_000.0)}km")
+                Text("소비 열량 ${healthSummary.activeCaloriesKcal}kcal")
+                healthSummary.averageHeartRate?.let {
+                    Text("평균 심박수 ${it}bpm")
+                }
             }
         }
         Card {
@@ -748,6 +931,17 @@ private fun HistoryScreen(
                     Text(workout.title, style = MaterialTheme.typography.titleMedium)
                     Text("${workout.type.label} · ${workout.durationMinutes}분 · RPE ${workout.rpe}")
                     Text(workout.startedAt.format(DateTimeFormatter.ofPattern("M월 d일 HH:mm")))
+                    Text(
+                        when (workout.healthConnectSyncState) {
+                            com.openai.interactivefitness.domain.HealthConnectSyncState.IMPORTED ->
+                                "Health Connect에서 가져옴"
+                            com.openai.interactivefitness.domain.HealthConnectSyncState.EXPORTED ->
+                                "Health Connect에 동기화됨"
+                            com.openai.interactivefitness.domain.HealthConnectSyncState.NOT_SYNCED ->
+                                "앱에만 저장됨"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                     Text(workout.detail, style = MaterialTheme.typography.bodySmall)
                     if (workout.strengthSets.isNotEmpty()) {
                         Text(

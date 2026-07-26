@@ -113,6 +113,7 @@ data class ActiveWorkout(
 enum class ErrorCategory {
     DATABASE,
     FIREBASE,
+    HEALTH_CONNECT,
     RECOMMENDATION,
     STATE_RESTORE,
     UNKNOWN,
@@ -152,6 +153,8 @@ data class WeeklySummary(
     val strengthSessions: Int,
     val cardioSessions: Int,
     val goalProgress: Float,
+    val activeDays: Int = 0,
+    val currentStreakDays: Int = 0,
 )
 
 data class WorkoutDraft(

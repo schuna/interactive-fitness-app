@@ -1,6 +1,7 @@
 package com.openai.interactivefitness.ui
 
 import androidx.lifecycle.ViewModel
+import androidx.credentials.exceptions.NoCredentialException
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.createSavedStateHandle
@@ -14,6 +15,8 @@ import com.openai.interactivefitness.data.ErrorLogStore
 import com.openai.interactivefitness.data.FirebaseSyncService
 import com.openai.interactivefitness.data.FirebaseSyncStatus
 import com.openai.interactivefitness.data.HealthConnectManager
+import com.openai.interactivefitness.data.HealthConnectSummary
+import com.openai.interactivefitness.data.GoogleSignInManager
 import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.firestore.FirebaseFirestoreException
 import java.io.IOException
@@ -47,6 +50,7 @@ data class FitnessUiState(
     val errorHistory: List<AppError> = emptyList(),
     val firebaseSyncStatus: FirebaseSyncStatus = FirebaseSyncStatus.UNCONFIGURED,
     val healthConnectImportMessage: String? = null,
+    val healthConnectSummary: HealthConnectSummary = HealthConnectSummary(),
 )
 
 class FitnessViewModel(
@@ -63,6 +67,7 @@ class FitnessViewModel(
     private val firebaseStatus = firebaseSyncService?.status
         ?: MutableStateFlow(FirebaseSyncStatus.UNCONFIGURED)
     private val healthConnectImportMessage = MutableStateFlow<String?>(null)
+    private val healthConnectSummary = MutableStateFlow(HealthConnectSummary())
     private val activeWorkout = MutableStateFlow(
         restoreActiveWorkout() ?: activeWorkoutStore.load(),
     )
@@ -77,6 +82,16 @@ class FitnessViewModel(
             val recent = workouts.filter {
                 it.startedAt.isAfter(LocalDateTime.now().minusDays(7))
             }
+            val workoutDates = workouts.map { it.startedAt.toLocalDate() }.toSet()
+            val today = LocalDate.now()
+            val streakAnchor = when {
+                today in workoutDates -> today
+                today.minusDays(1) in workoutDates -> today.minusDays(1)
+                else -> null
+            }
+            val currentStreak = generateSequence(streakAnchor) { it.minusDays(1) }
+                .takeWhile { it in workoutDates }
+                .count()
             FitnessUiState(
                 workouts = workouts,
                 condition = currentCondition,
@@ -89,6 +104,8 @@ class FitnessViewModel(
                         it.type == WorkoutType.RUNNING || it.type == WorkoutType.CYCLING
                     },
                     goalProgress = (recent.size / 4f).coerceAtMost(1f),
+                    activeDays = recent.map { it.startedAt.toLocalDate() }.distinct().size,
+                    currentStreakDays = currentStreak,
                 ),
                 activeWorkout = currentWorkout,
                 isTodayRecommendationCompleted = workouts.any {
@@ -103,6 +120,8 @@ class FitnessViewModel(
             state.copy(firebaseSyncStatus = status)
         }.combine(healthConnectImportMessage) { state, message ->
             state.copy(healthConnectImportMessage = message)
+        }.combine(healthConnectSummary) { state, summary ->
+            state.copy(healthConnectSummary = summary)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FitnessUiState())
 
     init {
@@ -205,18 +224,7 @@ class FitnessViewModel(
                     )
                 repository.save(workout)
                 syncWorkoutSafely(workout)
-                if (healthConnectManager?.status() ==
-                    com.openai.interactivefitness.data.HealthConnectStatus.READY
-                ) {
-                    healthConnectManager.writeWorkout(workout)
-                    repository.save(
-                        workout.copy(
-                            healthConnectSyncState =
-                                com.openai.interactivefitness.domain.HealthConnectSyncState.EXPORTED,
-                            lastSyncedAt = LocalDateTime.now(),
-                        ),
-                    )
-                }
+                syncHealthConnectSafely(workout, healthConnectManager)
             }.onSuccess {
                 setActiveWorkout(null)
             }.onFailure {
@@ -245,11 +253,23 @@ class FitnessViewModel(
         }
     }
 
-    fun deleteWorkout(id: String) {
+    fun deleteWorkout(id: String, healthConnectManager: HealthConnectManager? = null) {
         viewModelScope.launch {
             runCatching {
+                val workout = uiState.value.workouts.firstOrNull { it.id == id }
+                if (
+                    workout != null &&
+                    workout.healthConnectSyncState !=
+                    com.openai.interactivefitness.domain.HealthConnectSyncState.NOT_SYNCED &&
+                    healthConnectManager?.status() ==
+                    com.openai.interactivefitness.data.HealthConnectStatus.READY
+                ) {
+                    healthConnectManager.deleteWorkout(workout)
+                }
                 repository.delete(id)
-                firebaseSyncService?.deleteWorkout(id)
+                if (firebaseStatus.value != FirebaseSyncStatus.SIGNED_OUT) {
+                    firebaseSyncService?.deleteWorkout(id)
+                }
             }
                 .onFailure { error ->
                     recordError(error.toFirebaseAppError("deleteWorkout"))
@@ -282,6 +302,7 @@ class FitnessViewModel(
 
     fun syncNow() {
         val service = firebaseSyncService ?: return
+        if (firebaseStatus.value == FirebaseSyncStatus.SIGNED_OUT) return
         viewModelScope.launch {
             runCatching { service.syncAll(uiState.value.workouts) }
                 .onFailure { error ->
@@ -291,6 +312,37 @@ class FitnessViewModel(
         }
     }
 
+    fun signInWithGoogle(manager: GoogleSignInManager) {
+        val service = firebaseSyncService ?: return
+        viewModelScope.launch {
+            runCatching {
+                service.signInWithGoogle(manager.getIdToken())
+                service.syncAll(uiState.value.workouts)
+            }.onFailure {
+                recordError(
+                    AppError(
+                        code = "GOOGLE_SIGN_IN_FAILED",
+                        category = ErrorCategory.FIREBASE,
+                        userMessage = if (
+                            it.message?.contains("OAuth web client") == true
+                        ) {
+                            "Firebase Google 로그인 설정이 필요합니다."
+                        } else if (it is NoCredentialException) {
+                            "기기에 Google 계정을 추가한 뒤 다시 로그인하세요."
+                        } else {
+                            "Google 계정 로그인에 실패했습니다."
+                        },
+                        operation = "signInWithGoogle",
+                    ),
+                )
+            }
+        }
+    }
+
+    fun signOut() {
+        firebaseSyncService?.signOut()
+    }
+
     fun importHealthConnect(manager: HealthConnectManager) {
         viewModelScope.launch {
             healthConnectImportMessage.value = "최근 운동을 확인하는 중입니다."
@@ -298,6 +350,7 @@ class FitnessViewModel(
                 val existingIds = uiState.value.workouts.mapTo(mutableSetOf()) { it.id }
                 val workouts = manager.readRecentWorkouts()
                 workouts.forEach { repository.save(it) }
+                healthConnectSummary.value = manager.readWeeklySummary()
                 workouts.count { it.id !in existingIds }
             }.onSuccess { importedCount ->
                 healthConnectImportMessage.value = if (importedCount == 0) {
@@ -310,7 +363,7 @@ class FitnessViewModel(
                 recordError(
                     AppError(
                         code = "HEALTH_CONNECT_IMPORT_FAILED",
-                        category = ErrorCategory.UNKNOWN,
+                        category = ErrorCategory.HEALTH_CONNECT,
                         userMessage = "Health Connect 운동 기록을 가져오지 못했습니다.",
                         operation = "importHealthConnect",
                     ),
@@ -321,11 +374,43 @@ class FitnessViewModel(
 
     private suspend fun syncWorkoutSafely(workout: WorkoutSession) {
         val service = firebaseSyncService ?: return
+        if (firebaseStatus.value == FirebaseSyncStatus.SIGNED_OUT) return
         runCatching { service.syncWorkout(workout) }
             .onFailure { error ->
                 service.scheduleRetry()
                 recordError(error.toFirebaseAppError("syncWorkout"))
             }
+    }
+
+    private suspend fun syncHealthConnectSafely(
+        workout: WorkoutSession,
+        manager: HealthConnectManager?,
+    ) {
+        if (manager == null) return
+        runCatching {
+            if (manager.status() !=
+                com.openai.interactivefitness.data.HealthConnectStatus.READY
+            ) {
+                return
+            }
+            manager.writeWorkout(workout)
+            repository.save(
+                workout.copy(
+                    healthConnectSyncState =
+                        com.openai.interactivefitness.domain.HealthConnectSyncState.EXPORTED,
+                    lastSyncedAt = LocalDateTime.now(),
+                ),
+            )
+        }.onFailure {
+            recordError(
+                AppError(
+                    code = "HEALTH_CONNECT_EXPORT_FAILED",
+                    category = ErrorCategory.HEALTH_CONNECT,
+                    userMessage = "운동은 저장했지만 Health Connect로 보내지 못했습니다.",
+                    operation = "exportHealthConnect",
+                ),
+            )
+        }
     }
 
     private fun Throwable.toFirebaseAppError(operation: String): AppError {

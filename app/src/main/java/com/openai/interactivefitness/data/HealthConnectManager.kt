@@ -2,6 +2,7 @@ package com.openai.interactivefitness.data
 
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
@@ -10,6 +11,7 @@ import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import com.openai.interactivefitness.domain.WorkoutSession
 import com.openai.interactivefitness.domain.WorkoutType
@@ -19,6 +21,12 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 
 enum class HealthConnectStatus {
     UNAVAILABLE,
@@ -26,6 +34,13 @@ enum class HealthConnectStatus {
     PERMISSION_REQUIRED,
     READY,
 }
+
+data class HealthConnectSummary(
+    val steps: Long = 0,
+    val distanceMeters: Long = 0,
+    val averageHeartRate: Int? = null,
+    val activeCaloriesKcal: Int = 0,
+)
 
 class HealthConnectManager(private val context: Context) {
     companion object {
@@ -42,6 +57,43 @@ class HealthConnectManager(private val context: Context) {
     )
 
     fun sdkStatus(): Int = HealthConnectClient.getSdkStatus(context)
+
+    fun extendedPermissions(): Set<String> {
+        if (sdkStatus() != HealthConnectClient.SDK_AVAILABLE) return emptySet()
+        val features = HealthConnectClient.getOrCreate(context).features
+        return buildSet {
+            if (
+                features.getFeatureStatus(
+                    HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY,
+                ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+            ) {
+                add(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+            }
+            if (
+                features.getFeatureStatus(
+                    HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND,
+                ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+            ) {
+                add(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
+            }
+        }
+    }
+
+    fun scheduleBackgroundSync() {
+        val request = PeriodicWorkRequestBuilder<HealthConnectSyncWorker>(
+            6,
+            TimeUnit.HOURS,
+        ).setConstraints(
+            Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+                .build(),
+        ).build()
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            "health-connect-workout-sync",
+            ExistingPeriodicWorkPolicy.KEEP,
+            request,
+        )
+    }
 
     suspend fun status(): HealthConnectStatus =
         when (sdkStatus()) {
@@ -60,6 +112,15 @@ class HealthConnectManager(private val context: Context) {
             }
         }
 
+    suspend fun hasPermissions(required: Set<String>): Boolean {
+        if (required.isEmpty()) return true
+        if (sdkStatus() != HealthConnectClient.SDK_AVAILABLE) return false
+        return HealthConnectClient.getOrCreate(context)
+            .permissionController
+            .getGrantedPermissions()
+            .containsAll(required)
+    }
+
     suspend fun readRecentWorkouts(
         since: Instant = Instant.now().minus(Duration.ofDays(30)),
     ): List<WorkoutSession> {
@@ -73,7 +134,9 @@ class HealthConnectManager(private val context: Context) {
                 ascendingOrder = false,
             ),
         )
-        return response.records.map { record ->
+        return response.records
+            .filter { it.metadata.dataOrigin.packageName != context.packageName }
+            .map { record ->
             val type = when (record.exerciseType) {
                 ExerciseSessionRecord.EXERCISE_TYPE_RUNNING,
                 ExerciseSessionRecord.EXERCISE_TYPE_RUNNING_TREADMILL -> WorkoutType.RUNNING
@@ -102,7 +165,37 @@ class HealthConnectManager(private val context: Context) {
                 healthConnectSyncState = HealthConnectSyncState.IMPORTED,
                 lastSyncedAt = LocalDateTime.now(),
             )
+            }
+    }
+
+    suspend fun readWeeklySummary(
+        end: Instant = Instant.now(),
+    ): HealthConnectSummary {
+        check(status() == HealthConnectStatus.READY) {
+            "Health Connect permission is required"
         }
+        val result = HealthConnectClient.getOrCreate(context).aggregate(
+            AggregateRequest(
+                metrics = setOf(
+                    StepsRecord.COUNT_TOTAL,
+                    DistanceRecord.DISTANCE_TOTAL,
+                    HeartRateRecord.BPM_AVG,
+                    TotalCaloriesBurnedRecord.ENERGY_TOTAL,
+                ),
+                timeRangeFilter = TimeRangeFilter.between(
+                    end.minus(Duration.ofDays(7)),
+                    end,
+                ),
+            ),
+        )
+        return HealthConnectSummary(
+            steps = result[StepsRecord.COUNT_TOTAL] ?: 0,
+            distanceMeters = result[DistanceRecord.DISTANCE_TOTAL]
+                ?.inMeters?.toLong() ?: 0,
+            averageHeartRate = result[HeartRateRecord.BPM_AVG]?.toInt(),
+            activeCaloriesKcal = result[TotalCaloriesBurnedRecord.ENERGY_TOTAL]
+                ?.inKilocalories?.toInt() ?: 0,
+        )
     }
 
     suspend fun writeWorkout(workout: WorkoutSession) {
@@ -137,6 +230,21 @@ class HealthConnectManager(private val context: Context) {
                     ),
                 ),
             ),
+        )
+    }
+
+    suspend fun deleteWorkout(workout: WorkoutSession) {
+        check(status() == HealthConnectStatus.READY) {
+            "Health Connect permission is required"
+        }
+        HealthConnectClient.getOrCreate(context).deleteRecords(
+            ExerciseSessionRecord::class,
+            recordIdsList = listOfNotNull(workout.externalRecordId),
+            clientRecordIdsList = if (workout.dataSource == WorkoutDataSource.LOCAL) {
+                listOf(workout.id)
+            } else {
+                emptyList()
+            },
         )
     }
 }
