@@ -25,6 +25,7 @@ import com.openai.interactivefitness.domain.ActiveWorkout
 import com.openai.interactivefitness.domain.Recommendation
 import com.openai.interactivefitness.domain.RecommendationEngine
 import com.openai.interactivefitness.domain.WeeklySummary
+import com.openai.interactivefitness.domain.WeeklySummaryCalculator
 import com.openai.interactivefitness.domain.WorkoutSession
 import com.openai.interactivefitness.domain.WorkoutDraft
 import com.openai.interactivefitness.domain.WorkoutType
@@ -60,6 +61,7 @@ class FitnessViewModel(
     private val firebaseSyncService: FirebaseSyncService?,
     private val savedStateHandle: SavedStateHandle,
     private val recommendationEngine: RecommendationEngine = RecommendationEngine(),
+    private val weeklySummaryCalculator: WeeklySummaryCalculator = WeeklySummaryCalculator(),
 ) : ViewModel() {
     private val condition = MutableStateFlow(DailyCondition())
     private val lastError = MutableStateFlow<AppError?>(null)
@@ -79,34 +81,11 @@ class FitnessViewModel(
                 currentCondition,
                 currentWorkout,
             ->
-            val recent = workouts.filter {
-                it.startedAt.isAfter(LocalDateTime.now().minusDays(7))
-            }
-            val workoutDates = workouts.map { it.startedAt.toLocalDate() }.toSet()
-            val today = LocalDate.now()
-            val streakAnchor = when {
-                today in workoutDates -> today
-                today.minusDays(1) in workoutDates -> today.minusDays(1)
-                else -> null
-            }
-            val currentStreak = generateSequence(streakAnchor) { it.minusDays(1) }
-                .takeWhile { it in workoutDates }
-                .count()
             FitnessUiState(
                 workouts = workouts,
                 condition = currentCondition,
                 recommendation = recommendationEngine.recommend(workouts, currentCondition),
-                weeklySummary = WeeklySummary(
-                    sessions = recent.size,
-                    totalMinutes = recent.sumOf(WorkoutSession::durationMinutes),
-                    strengthSessions = recent.count { it.type == WorkoutType.STRENGTH },
-                    cardioSessions = recent.count {
-                        it.type == WorkoutType.RUNNING || it.type == WorkoutType.CYCLING
-                    },
-                    goalProgress = (recent.size / 4f).coerceAtMost(1f),
-                    activeDays = recent.map { it.startedAt.toLocalDate() }.distinct().size,
-                    currentStreakDays = currentStreak,
-                ),
+                weeklySummary = weeklySummaryCalculator.calculate(workouts),
                 activeWorkout = currentWorkout,
                 isTodayRecommendationCompleted = workouts.any {
                     it.recommendationDate == LocalDate.now()
