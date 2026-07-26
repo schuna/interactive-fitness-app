@@ -43,4 +43,28 @@ class WorkoutDraftTest {
         assertEquals(40, updated.durationMinutes)
         assertEquals("수정된 기록", updated.title)
     }
+
+    @Test
+    fun structuredSetsAndIntervalsAreCopiedToSession() {
+        val set = StrengthSet(
+            exercise = "스쿼트",
+            weightKg = 60.0,
+            reps = 8,
+            rpe = 7,
+        )
+        val interval = WorkoutInterval(
+            durationSeconds = 300,
+            distanceMeters = 1_000,
+            note = "편안한 페이스",
+        )
+        val session = WorkoutDraft(
+            type = WorkoutType.STRENGTH,
+            title = "구조화 운동",
+            strengthSets = listOf(set),
+            intervals = listOf(interval),
+        ).toSession(now = LocalDateTime.of(2026, 7, 26, 9, 0))
+
+        assertEquals(listOf(set), session.strengthSets)
+        assertEquals(listOf(interval), session.intervals)
+    }
 }

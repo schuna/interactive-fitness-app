@@ -50,8 +50,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.openai.interactivefitness.FitnessApplication
 import com.openai.interactivefitness.domain.Recommendation
+import com.openai.interactivefitness.domain.ActiveWorkout
+import com.openai.interactivefitness.domain.StrengthSet
 import com.openai.interactivefitness.domain.WeeklySummary
 import com.openai.interactivefitness.domain.WorkoutDraft
+import com.openai.interactivefitness.domain.WorkoutInterval
 import com.openai.interactivefitness.domain.WorkoutSession
 import com.openai.interactivefitness.domain.WorkoutType
 import java.time.format.DateTimeFormatter
@@ -70,11 +73,45 @@ private enum class Destination(
 fun FitnessApp() {
     val application = LocalContext.current.applicationContext as FitnessApplication
     val viewModel: FitnessViewModel = viewModel(
-        factory = FitnessViewModel.factory(application.workoutRepository),
+        factory = FitnessViewModel.factory(
+            application.workoutRepository,
+            application.activeWorkoutStore,
+        ),
     )
     val state by viewModel.uiState.collectAsState()
     val selected = androidx.compose.runtime.saveable.rememberSaveable {
         androidx.compose.runtime.mutableStateOf(Destination.TODAY)
+    }
+
+    state.error?.let { error ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissError,
+            title = { Text("작업을 완료하지 못했습니다") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(error.userMessage)
+                    Text(
+                        "오류 코드: ${error.code}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::dismissError) { Text("확인") }
+            },
+        )
+    }
+
+    state.activeWorkout?.let { activeWorkout ->
+        WorkoutProgressScreen(
+            activeWorkout = activeWorkout,
+            onCompleteStep = viewModel::completeCurrentStep,
+            onSkipRest = viewModel::skipRest,
+            onAdjustRest = viewModel::adjustRest,
+            onFinish = viewModel::finishActiveWorkout,
+            onCancel = viewModel::cancelActiveWorkout,
+        )
+        return
     }
 
     Scaffold(
@@ -98,12 +135,12 @@ fun FitnessApp() {
                     onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
                     onSorenessChanged = { viewModel.updateCondition(soreness = it) },
                     onPainChanged = { viewModel.updateCondition(hasPain = it) },
-                    onComplete = viewModel::completeRecommendation,
+                    onStart = viewModel::startRecommendation,
                 )
                 Destination.CHAT -> ChatScreen(
                     recommendation = state.recommendation,
                     onQuickWorkout = viewModel::addQuickWorkout,
-                    onComplete = viewModel::completeRecommendation,
+                    onStart = viewModel::startRecommendation,
                 )
                 Destination.DASHBOARD -> DashboardScreen(state.weeklySummary)
                 Destination.HISTORY -> HistoryScreen(
@@ -122,7 +159,7 @@ private fun TodayScreen(
     onFatigueChanged: (Int) -> Unit,
     onSorenessChanged: (Int) -> Unit,
     onPainChanged: (Boolean) -> Unit,
-    onComplete: () -> Unit,
+    onStart: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -145,7 +182,7 @@ private fun TodayScreen(
         }
         item {
             state.recommendation?.let {
-                RecommendationCard(it, onComplete)
+                RecommendationCard(it, onStart)
             } ?: CircularProgressIndicator()
         }
         item { Spacer(Modifier.height(16.dp)) }
@@ -187,7 +224,7 @@ private fun ConditionCard(
 }
 
 @Composable
-private fun RecommendationCard(recommendation: Recommendation, onComplete: () -> Unit) {
+private fun RecommendationCard(recommendation: Recommendation, onStart: () -> Unit) {
     Card {
         Column(
             modifier = Modifier.padding(18.dp),
@@ -201,8 +238,8 @@ private fun RecommendationCard(recommendation: Recommendation, onComplete: () ->
             recommendation.safetyNotice?.let {
                 Text(it, color = MaterialTheme.colorScheme.error)
             }
-            Button(onClick = onComplete, modifier = Modifier.fillMaxWidth()) {
-                Text("이 운동 완료로 기록")
+            Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) {
+                Text("운동 시작")
             }
         }
     }
@@ -212,7 +249,7 @@ private fun RecommendationCard(recommendation: Recommendation, onComplete: () ->
 private fun ChatScreen(
     recommendation: Recommendation?,
     onQuickWorkout: (WorkoutType) -> Unit,
-    onComplete: () -> Unit,
+    onStart: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(20.dp),
@@ -224,7 +261,7 @@ private fun ChatScreen(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(recommendation?.reason ?: "추천을 준비하고 있어요.")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AssistChip(onClick = onComplete, label = { Text("추천 완료 기록") })
+                        AssistChip(onClick = onStart, label = { Text("추천 운동 시작") })
                     }
                 }
             }
@@ -272,6 +309,135 @@ private fun DashboardScreen(summary: WeeklySummary) {
         }
     }
 }
+
+@Composable
+private fun WorkoutProgressScreen(
+    activeWorkout: ActiveWorkout,
+    onCompleteStep: () -> Unit,
+    onSkipRest: () -> Unit,
+    onAdjustRest: (Int) -> Unit,
+    onFinish: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    var confirmCancel by remember { mutableStateOf(false) }
+
+    if (confirmCancel) {
+        AlertDialog(
+            onDismissRequest = { confirmCancel = false },
+            title = { Text("운동을 취소할까요?") },
+            text = { Text("현재 진행 상황은 기록되지 않습니다.") },
+            confirmButton = {
+                TextButton(onClick = onCancel) {
+                    Text("운동 취소", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmCancel = false }) { Text("계속하기") }
+            },
+        )
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("운동 진행", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    activeWorkout.recommendation.title,
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+            }
+            TextButton(onClick = { confirmCancel = true }) { Text("취소") }
+        }
+
+        LinearProgressIndicator(
+            progress = { activeWorkout.progress },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text("${activeWorkout.completedSteps}/${activeWorkout.steps.size}단계 완료")
+
+        if (activeWorkout.completedSteps >= activeWorkout.steps.size) {
+            Card {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("운동을 모두 마쳤습니다!", style = MaterialTheme.typography.titleLarge)
+                    Text("완료 기록을 저장하고 대시보드를 갱신하세요.")
+                    Button(onClick = onFinish, modifier = Modifier.fillMaxWidth()) {
+                        Text("운동 종료 및 저장")
+                    }
+                }
+            }
+        } else if (activeWorkout.isResting) {
+            Card {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text("휴식", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        formatTimer(activeWorkout.restSecondsRemaining),
+                        style = MaterialTheme.typography.displayMedium,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AssistChip(
+                            onClick = { onAdjustRest(-15) },
+                            label = { Text("-15초") },
+                        )
+                        AssistChip(
+                            onClick = { onAdjustRest(15) },
+                            label = { Text("+15초") },
+                        )
+                    }
+                    Button(onClick = onSkipRest, modifier = Modifier.fillMaxWidth()) {
+                        Text("휴식 건너뛰기")
+                    }
+                }
+            }
+        } else {
+            val currentStep = activeWorkout.steps.getOrNull(activeWorkout.currentStepIndex)
+            Card {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        "현재 단계 ${activeWorkout.currentStepIndex + 1}",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Text(
+                        currentStep.orEmpty(),
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
+                    Button(onClick = onCompleteStep, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (activeWorkout.isLastStep) "마지막 단계 완료" else "운동 시작")
+                    }
+                }
+            }
+        }
+
+        Text("전체 계획", style = MaterialTheme.typography.titleMedium)
+        activeWorkout.steps.forEachIndexed { index, step ->
+            val marker = when {
+                index < activeWorkout.completedSteps -> "✓"
+                index == activeWorkout.currentStepIndex -> "●"
+                else -> "○"
+            }
+            Text("$marker $step")
+        }
+    }
+}
+
+private fun formatTimer(totalSeconds: Int): String =
+    "%02d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 
 @Composable
 private fun HistoryScreen(
@@ -364,6 +530,20 @@ private fun HistoryScreen(
                     Text("${workout.type.label} · ${workout.durationMinutes}분 · RPE ${workout.rpe}")
                     Text(workout.startedAt.format(DateTimeFormatter.ofPattern("M월 d일 HH:mm")))
                     Text(workout.detail, style = MaterialTheme.typography.bodySmall)
+                    if (workout.strengthSets.isNotEmpty()) {
+                        Text(
+                            "${workout.strengthSets.size}세트 · " +
+                                "${workout.strengthSets.sumOf { it.weightKg * it.reps }.toInt()}kg 볼륨",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (workout.intervals.isNotEmpty()) {
+                        Text(
+                            "${workout.intervals.size}인터벌 · " +
+                                "${workout.intervals.sumOf { it.distanceMeters }}m",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     Row(
                         modifier = Modifier.align(Alignment.End),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -378,6 +558,8 @@ private fun HistoryScreen(
                                     durationMinutes = workout.durationMinutes.toString(),
                                     rpe = workout.rpe.toString(),
                                     detail = workout.detail,
+                                    strengthSets = workout.strengthSets,
+                                    intervals = workout.intervals,
                                 )
                             },
                         ) {
@@ -469,6 +651,108 @@ private fun WorkoutEditorDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                if (draft.type == WorkoutType.STRENGTH) {
+                    item {
+                        Text("웨이트 세트", style = MaterialTheme.typography.titleMedium)
+                        errors["strengthSets"]?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    items(draft.strengthSets.size) { index ->
+                        val set = draft.strengthSets[index]
+                        StrengthSetEditor(
+                            index = index,
+                            set = set,
+                            onChange = { changed ->
+                                onDraftChange(
+                                    draft.copy(
+                                        strengthSets = draft.strengthSets.toMutableList().apply {
+                                            this[index] = changed
+                                        },
+                                    ),
+                                )
+                            },
+                            onDelete = {
+                                onDraftChange(
+                                    draft.copy(
+                                        strengthSets = draft.strengthSets.filterIndexed { i, _ ->
+                                            i != index
+                                        },
+                                    ),
+                                )
+                            },
+                        )
+                    }
+                    item {
+                        TextButton(
+                            onClick = {
+                                onDraftChange(
+                                    draft.copy(
+                                        strengthSets = draft.strengthSets + StrengthSet(
+                                            exercise = draft.title.ifBlank { "운동" },
+                                            weightKg = 20.0,
+                                            reps = 10,
+                                            rpe = 6,
+                                        ),
+                                    ),
+                                )
+                            },
+                        ) {
+                            Text("+ 세트 추가")
+                        }
+                    }
+                } else if (
+                    draft.type == WorkoutType.RUNNING ||
+                    draft.type == WorkoutType.CYCLING
+                ) {
+                    item {
+                        Text("인터벌", style = MaterialTheme.typography.titleMedium)
+                        errors["intervals"]?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    items(draft.intervals.size) { index ->
+                        val interval = draft.intervals[index]
+                        IntervalEditor(
+                            index = index,
+                            interval = interval,
+                            onChange = { changed ->
+                                onDraftChange(
+                                    draft.copy(
+                                        intervals = draft.intervals.toMutableList().apply {
+                                            this[index] = changed
+                                        },
+                                    ),
+                                )
+                            },
+                            onDelete = {
+                                onDraftChange(
+                                    draft.copy(
+                                        intervals = draft.intervals.filterIndexed { i, _ ->
+                                            i != index
+                                        },
+                                    ),
+                                )
+                            },
+                        )
+                    }
+                    item {
+                        TextButton(
+                            onClick = {
+                                onDraftChange(
+                                    draft.copy(
+                                        intervals = draft.intervals + WorkoutInterval(
+                                            durationSeconds = 300,
+                                            distanceMeters = 1_000,
+                                        ),
+                                    ),
+                                )
+                            },
+                        ) {
+                            Text("+ 인터벌 추가")
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -488,3 +772,135 @@ private fun WorkoutEditorDialog(
         },
     )
 }
+
+@Composable
+private fun StrengthSetEditor(
+    index: Int,
+    set: StrengthSet,
+    onChange: (StrengthSet) -> Unit,
+    onDelete: () -> Unit,
+) {
+    Card {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("세트 ${index + 1}", modifier = Modifier.weight(1f))
+                TextButton(onClick = onDelete) { Text("제거") }
+            }
+            OutlinedTextField(
+                value = set.exercise,
+                onValueChange = { onChange(set.copy(exercise = it)) },
+                label = { Text("운동 종목") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                NumericField(
+                    value = set.weightKg.toDisplayString(),
+                    label = "중량(kg)",
+                    decimal = true,
+                    modifier = Modifier.weight(1f),
+                    onValueChange = { value ->
+                        value.toDoubleOrNull()?.let { onChange(set.copy(weightKg = it)) }
+                    },
+                )
+                NumericField(
+                    value = set.reps.toString(),
+                    label = "반복",
+                    modifier = Modifier.weight(1f),
+                    onValueChange = { value ->
+                        value.toIntOrNull()?.let { onChange(set.copy(reps = it.coerceAtLeast(1))) }
+                    },
+                )
+                NumericField(
+                    value = set.rpe.toString(),
+                    label = "RPE",
+                    modifier = Modifier.weight(1f),
+                    onValueChange = { value ->
+                        value.toIntOrNull()?.let { onChange(set.copy(rpe = it.coerceIn(1, 10))) }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun IntervalEditor(
+    index: Int,
+    interval: WorkoutInterval,
+    onChange: (WorkoutInterval) -> Unit,
+    onDelete: () -> Unit,
+) {
+    Card {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("인터벌 ${index + 1}", modifier = Modifier.weight(1f))
+                TextButton(onClick = onDelete) { Text("제거") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                NumericField(
+                    value = interval.durationSeconds.toString(),
+                    label = "시간(초)",
+                    modifier = Modifier.weight(1f),
+                    onValueChange = { value ->
+                        value.toIntOrNull()?.let {
+                            onChange(interval.copy(durationSeconds = it.coerceAtLeast(1)))
+                        }
+                    },
+                )
+                NumericField(
+                    value = interval.distanceMeters.toString(),
+                    label = "거리(m)",
+                    modifier = Modifier.weight(1f),
+                    onValueChange = { value ->
+                        value.toIntOrNull()?.let {
+                            onChange(interval.copy(distanceMeters = it.coerceAtLeast(0)))
+                        }
+                    },
+                )
+            }
+            OutlinedTextField(
+                value = interval.note,
+                onValueChange = { onChange(interval.copy(note = it)) },
+                label = { Text("메모") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun NumericField(
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    decimal: Boolean = false,
+    onValueChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number,
+        ),
+        singleLine = true,
+        modifier = modifier,
+    )
+}
+
+private fun Double.toDisplayString(): String =
+    if (this % 1.0 == 0.0) toInt().toString() else toString()

@@ -19,6 +19,92 @@ data class WorkoutSession(
     val durationMinutes: Int,
     val rpe: Int,
     val detail: String,
+    val strengthSets: List<StrengthSet> = emptyList(),
+    val intervals: List<WorkoutInterval> = emptyList(),
+)
+
+data class StrengthSet(
+    val id: String = UUID.randomUUID().toString(),
+    val exercise: String,
+    val weightKg: Double,
+    val reps: Int,
+    val rpe: Int,
+)
+
+data class WorkoutInterval(
+    val id: String = UUID.randomUUID().toString(),
+    val durationSeconds: Int,
+    val distanceMeters: Int,
+    val note: String = "",
+)
+
+data class ActiveWorkout(
+    val recommendation: Recommendation,
+    val startedAt: LocalDateTime,
+    val steps: List<String>,
+    val currentStepIndex: Int = 0,
+    val completedSteps: Int = 0,
+    val restSecondsRemaining: Int = 0,
+    val isResting: Boolean = false,
+    val restEndsAtEpochMillis: Long? = null,
+) {
+    val isLastStep: Boolean
+        get() = currentStepIndex >= steps.lastIndex
+
+    val progress: Float
+        get() = if (steps.isEmpty()) 0f else completedSteps.toFloat() / steps.size
+
+    fun completeCurrentStep(
+        defaultRestSeconds: Int = 60,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ): ActiveWorkout =
+        if (steps.isEmpty()) {
+            this
+        } else {
+            copy(
+                completedSteps = (completedSteps + 1).coerceAtMost(steps.size),
+                isResting = !isLastStep,
+                restSecondsRemaining = if (isLastStep) 0 else defaultRestSeconds,
+                restEndsAtEpochMillis = if (isLastStep) {
+                    null
+                } else {
+                    nowEpochMillis + defaultRestSeconds * 1_000L
+                },
+            )
+        }
+
+    fun moveToNextStep(): ActiveWorkout =
+        copy(
+            currentStepIndex = (currentStepIndex + 1).coerceAtMost(steps.lastIndex),
+            isResting = false,
+            restSecondsRemaining = 0,
+            restEndsAtEpochMillis = null,
+        )
+
+    fun restoredAt(nowEpochMillis: Long = System.currentTimeMillis()): ActiveWorkout {
+        if (!isResting) return this
+        val remaining = restEndsAtEpochMillis
+            ?.minus(nowEpochMillis)
+            ?.let { ((it + 999L) / 1_000L).toInt().coerceAtLeast(0) }
+            ?: restSecondsRemaining
+        return if (remaining <= 0) moveToNextStep()
+        else copy(restSecondsRemaining = remaining)
+    }
+}
+
+enum class ErrorCategory {
+    DATABASE,
+    STATE_RESTORE,
+    UNKNOWN,
+}
+
+data class AppError(
+    val code: String,
+    val category: ErrorCategory,
+    val userMessage: String,
+    val operation: String,
+    val occurredAt: LocalDateTime = LocalDateTime.now(),
+    val isRecoverable: Boolean = true,
 )
 
 data class DailyCondition(
@@ -55,6 +141,8 @@ data class WorkoutDraft(
     val durationMinutes: String = "30",
     val rpe: String = "6",
     val detail: String = "",
+    val strengthSets: List<StrengthSet> = emptyList(),
+    val intervals: List<WorkoutInterval> = emptyList(),
 ) {
     fun validate(): Map<String, String> = buildMap {
         if (title.isBlank()) put("title", "운동 제목을 입력하세요.")
@@ -65,6 +153,15 @@ data class WorkoutDraft(
         val parsedRpe = rpe.toIntOrNull()
         if (parsedRpe == null || parsedRpe !in 1..10) {
             put("rpe", "RPE는 1~10 사이여야 합니다.")
+        }
+        if (strengthSets.any {
+                it.exercise.isBlank() || it.weightKg < 0 || it.reps < 1 || it.rpe !in 1..10
+            }
+        ) {
+            put("strengthSets", "세트의 종목, 중량, 반복 수와 RPE를 확인하세요.")
+        }
+        if (intervals.any { it.durationSeconds < 1 || it.distanceMeters < 0 }) {
+            put("intervals", "인터벌의 시간과 거리를 확인하세요.")
         }
     }
 
@@ -81,6 +178,8 @@ data class WorkoutDraft(
             durationMinutes = durationMinutes.toInt(),
             rpe = rpe.toInt(),
             detail = detail.trim(),
+            strengthSets = strengthSets,
+            intervals = intervals,
         )
     }
 }
