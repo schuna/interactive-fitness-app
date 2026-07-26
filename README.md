@@ -19,6 +19,12 @@
 - 화면 회전 및 앱 프로세스 재실행 후 진행 세션 복원
 - 절대 종료 시각 기반 휴식 타이머 복원
 - 저장·삭제 실패 공통 오류 코드와 사용자 오류 대화상자
+- 오늘의 추천 운동 완료 표시와 중복 시작 방지
+- 추천 ID·날짜를 저장하는 Room 스키마 v3 마이그레이션
+- 최대 50건의 개인정보 비포함 오류 기록과 사용자 진단 화면
+- Firebase 설정 유무를 감지하는 로컬 전용 안전 모드
+- Firebase 익명 인증과 UID별 Firestore 운동 기록 동기화
+- 수동 재동기화와 동기화 상태·오류 진단
 - 주간 횟수, 시간, 목표 진행률 집계
 - 추천 엔진 단위 테스트
 
@@ -32,8 +38,19 @@
 
 ## 다음 구현 순서
 
-1. 오류 기록과 사용자 진단 화면
-2. Firebase Authentication 및 Firestore 동기화
-3. Health Connect 지원 여부와 권한 화면
+1. Health Connect 지원 여부와 권한 화면
+
+## Firebase 연결
+
+Firebase 설정이 없어도 앱은 Room 기반 로컬 전용 모드로 실행됩니다.
+
+1. Firebase Console에서 Android 앱 `com.openai.interactivefitness`를 등록합니다.
+2. `google-services.json`을 `app/google-services.json`에 둡니다.
+3. Authentication에서 익명 로그인을 활성화합니다.
+4. Cloud Firestore를 생성합니다.
+5. `firebase deploy --only firestore:rules`로 포함된 보안 규칙을 배포합니다.
+6. Gradle Sync 후 앱의 진단 화면에서 Firebase 상태를 확인합니다.
+
+Firebase BoM은 현재 Kotlin 1.9 빌드 체인과 호환되는 `32.8.1`로 고정되어 있습니다.
 
 Firebase와 Health Connect 설정 없이도 로컬 모드가 계속 동작하도록 유지합니다.

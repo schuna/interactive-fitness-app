@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.openai.interactivefitness.FitnessApplication
+import com.openai.interactivefitness.BuildConfig
 import com.openai.interactivefitness.domain.Recommendation
 import com.openai.interactivefitness.domain.ActiveWorkout
 import com.openai.interactivefitness.domain.StrengthSet
@@ -76,11 +77,24 @@ fun FitnessApp() {
         factory = FitnessViewModel.factory(
             application.workoutRepository,
             application.activeWorkoutStore,
+            application.errorLogStore,
+            application.firebaseSyncService,
         ),
     )
     val state by viewModel.uiState.collectAsState()
     val selected = androidx.compose.runtime.saveable.rememberSaveable {
         androidx.compose.runtime.mutableStateOf(Destination.TODAY)
+    }
+    var showDiagnostics by remember { mutableStateOf(false) }
+
+    if (showDiagnostics) {
+        DiagnosticsDialog(
+            errors = state.errorHistory,
+            firebaseStatus = state.firebaseSyncStatus,
+            onSync = viewModel::syncNow,
+            onClear = viewModel::clearErrorHistory,
+            onDismiss = { showDiagnostics = false },
+        )
     }
 
     state.error?.let { error ->
@@ -136,11 +150,14 @@ fun FitnessApp() {
                     onSorenessChanged = { viewModel.updateCondition(soreness = it) },
                     onPainChanged = { viewModel.updateCondition(hasPain = it) },
                     onStart = viewModel::startRecommendation,
+                    isCompleted = state.isTodayRecommendationCompleted,
+                    onOpenDiagnostics = { showDiagnostics = true },
                 )
                 Destination.CHAT -> ChatScreen(
                     recommendation = state.recommendation,
                     onQuickWorkout = viewModel::addQuickWorkout,
                     onStart = viewModel::startRecommendation,
+                    isCompleted = state.isTodayRecommendationCompleted,
                 )
                 Destination.DASHBOARD -> DashboardScreen(state.weeklySummary)
                 Destination.HISTORY -> HistoryScreen(
@@ -160,6 +177,8 @@ private fun TodayScreen(
     onSorenessChanged: (Int) -> Unit,
     onPainChanged: (Boolean) -> Unit,
     onStart: () -> Unit,
+    isCompleted: Boolean,
+    onOpenDiagnostics: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -167,7 +186,17 @@ private fun TodayScreen(
     ) {
         item {
             Spacer(Modifier.height(12.dp))
-            Text("오늘의 운동", style = MaterialTheme.typography.headlineMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "오늘의 운동",
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onOpenDiagnostics) { Text("진단") }
+            }
             Text("기록과 컨디션을 바탕으로 준비했어요.")
         }
         item {
@@ -182,12 +211,79 @@ private fun TodayScreen(
         }
         item {
             state.recommendation?.let {
-                RecommendationCard(it, onStart)
+                RecommendationCard(it, onStart, isCompleted)
             } ?: CircularProgressIndicator()
         }
         item { Spacer(Modifier.height(16.dp)) }
     }
 }
+
+@Composable
+private fun DiagnosticsDialog(
+    errors: List<com.openai.interactivefitness.domain.AppError>,
+    firebaseStatus: com.openai.interactivefitness.data.FirebaseSyncStatus,
+    onSync: () -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("진단 및 오류 기록") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item {
+                    Text("앱 ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                    Text("Firebase: ${firebaseStatus.toUserLabel()}")
+                    Text(
+                        "민감한 운동 상세와 위치 정보는 포함하지 않습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (errors.isEmpty()) {
+                    item { Text("기록된 오류가 없습니다.") }
+                }
+                items(errors) { error ->
+                    Card {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(error.code, style = MaterialTheme.typography.titleSmall)
+                            Text(error.userMessage)
+                            Text(
+                                "${error.category} · ${error.operation} · " +
+                                    error.occurredAt.format(
+                                        DateTimeFormatter.ofPattern("M월 d일 HH:mm"),
+                                    ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("닫기") }
+        },
+        dismissButton = {
+            Row {
+                if (firebaseStatus != com.openai.interactivefitness.data.FirebaseSyncStatus.UNCONFIGURED) {
+                    TextButton(onClick = onSync) { Text("지금 동기화") }
+                }
+                if (errors.isNotEmpty()) {
+                    TextButton(onClick = onClear) { Text("기록 지우기") }
+                }
+            }
+        },
+    )
+}
+
+private fun com.openai.interactivefitness.data.FirebaseSyncStatus.toUserLabel(): String =
+    when (this) {
+        com.openai.interactivefitness.data.FirebaseSyncStatus.UNCONFIGURED -> "로컬 전용"
+        com.openai.interactivefitness.data.FirebaseSyncStatus.SIGNED_OUT -> "인증 대기"
+        com.openai.interactivefitness.data.FirebaseSyncStatus.AUTHENTICATING -> "익명 인증 중"
+        com.openai.interactivefitness.data.FirebaseSyncStatus.READY -> "연결됨"
+        com.openai.interactivefitness.data.FirebaseSyncStatus.SYNCING -> "동기화 중"
+        com.openai.interactivefitness.data.FirebaseSyncStatus.FAILED -> "동기화 실패"
+    }
 
 @Composable
 private fun ConditionCard(
@@ -224,13 +320,24 @@ private fun ConditionCard(
 }
 
 @Composable
-private fun RecommendationCard(recommendation: Recommendation, onStart: () -> Unit) {
+private fun RecommendationCard(
+    recommendation: Recommendation,
+    onStart: () -> Unit,
+    isCompleted: Boolean,
+) {
     Card {
         Column(
             modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(recommendation.title, style = MaterialTheme.typography.headlineSmall)
+            if (isCompleted) {
+                Text(
+                    "✓ 오늘의 추천 운동 완료",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
             Text("${recommendation.durationMinutes}분 · ${recommendation.difficulty}")
             Text(recommendation.reason)
             HorizontalDivider()
@@ -238,8 +345,12 @@ private fun RecommendationCard(recommendation: Recommendation, onStart: () -> Un
             recommendation.safetyNotice?.let {
                 Text(it, color = MaterialTheme.colorScheme.error)
             }
-            Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) {
-                Text("운동 시작")
+            Button(
+                onClick = onStart,
+                enabled = !isCompleted,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isCompleted) "완료됨" else "운동 시작")
             }
         }
     }
@@ -250,6 +361,7 @@ private fun ChatScreen(
     recommendation: Recommendation?,
     onQuickWorkout: (WorkoutType) -> Unit,
     onStart: () -> Unit,
+    isCompleted: Boolean,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(20.dp),
@@ -261,7 +373,13 @@ private fun ChatScreen(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(recommendation?.reason ?: "추천을 준비하고 있어요.")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AssistChip(onClick = onStart, label = { Text("추천 운동 시작") })
+                        AssistChip(
+                            onClick = onStart,
+                            enabled = !isCompleted,
+                            label = {
+                                Text(if (isCompleted) "오늘 추천 완료" else "추천 운동 시작")
+                            },
+                        )
                     }
                 }
             }

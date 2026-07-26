@@ -21,6 +21,8 @@ data class WorkoutSession(
     val detail: String,
     val strengthSets: List<StrengthSet> = emptyList(),
     val intervals: List<WorkoutInterval> = emptyList(),
+    val sourceRecommendationId: String? = null,
+    val recommendationDate: LocalDate? = null,
 )
 
 data class StrengthSet(
@@ -94,6 +96,8 @@ data class ActiveWorkout(
 
 enum class ErrorCategory {
     DATABASE,
+    FIREBASE,
+    RECOMMENDATION,
     STATE_RESTORE,
     UNKNOWN,
 }

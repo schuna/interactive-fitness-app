@@ -4,6 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.kapt")
 }
 
+val googleServicesConfig = layout.projectDirectory.file("google-services.json").asFile
+if (googleServicesConfig.exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.openai.interactivefitness"
     compileSdk = 36
@@ -52,6 +57,9 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")
+    implementation(platform("com.google.firebase:firebase-bom:32.8.1"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")

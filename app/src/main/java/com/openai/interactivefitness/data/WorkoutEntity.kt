@@ -17,6 +17,8 @@ data class WorkoutEntity(
     val durationMinutes: Int,
     val rpe: Int,
     val detail: String,
+    val sourceRecommendationId: String?,
+    val recommendationDate: String?,
 )
 
 fun WorkoutEntity.toDomain(): WorkoutSession = WorkoutSession(
@@ -27,6 +29,8 @@ fun WorkoutEntity.toDomain(): WorkoutSession = WorkoutSession(
     durationMinutes = durationMinutes,
     rpe = rpe,
     detail = detail,
+    sourceRecommendationId = sourceRecommendationId,
+    recommendationDate = recommendationDate?.let(java.time.LocalDate::parse),
 )
 
 fun WorkoutSession.toEntity(): WorkoutEntity = WorkoutEntity(
@@ -37,6 +41,8 @@ fun WorkoutSession.toEntity(): WorkoutEntity = WorkoutEntity(
     durationMinutes = durationMinutes,
     rpe = rpe,
     detail = detail,
+    sourceRecommendationId = sourceRecommendationId,
+    recommendationDate = recommendationDate?.toString(),
 )
 
 @Entity(

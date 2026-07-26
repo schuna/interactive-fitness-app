@@ -1,0 +1,140 @@
+package com.openai.interactivefitness.data
+
+import android.content.Context
+import com.google.android.gms.tasks.Task
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.AuthResult
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.openai.interactivefitness.domain.WorkoutSession
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+
+enum class FirebaseSyncStatus {
+    UNCONFIGURED,
+    SIGNED_OUT,
+    AUTHENTICATING,
+    READY,
+    SYNCING,
+    FAILED,
+}
+
+class FirebaseSyncService private constructor(
+    app: FirebaseApp,
+) {
+    private val auth = FirebaseAuth.getInstance(app)
+    private val firestore = FirebaseFirestore.getInstance(app)
+    private val mutableStatus = MutableStateFlow(
+        if (auth.currentUser == null) FirebaseSyncStatus.SIGNED_OUT else FirebaseSyncStatus.READY,
+    )
+    val status: StateFlow<FirebaseSyncStatus> = mutableStatus.asStateFlow()
+
+    suspend fun syncWorkout(workout: WorkoutSession) {
+        val uid = ensureAuthenticated()
+        mutableStatus.value = FirebaseSyncStatus.SYNCING
+        runCatching {
+            firestore.collection("users")
+                .document(uid)
+                .collection("workoutSessions")
+                .document(workout.id)
+                .set(workout.toFirestoreMap())
+                .awaitResult()
+        }.onSuccess {
+            mutableStatus.value = FirebaseSyncStatus.READY
+        }.onFailure {
+            mutableStatus.value = FirebaseSyncStatus.FAILED
+            throw it
+        }
+    }
+
+    suspend fun deleteWorkout(id: String) {
+        val uid = ensureAuthenticated()
+        mutableStatus.value = FirebaseSyncStatus.SYNCING
+        runCatching {
+            firestore.collection("users")
+                .document(uid)
+                .collection("workoutSessions")
+                .document(id)
+                .delete()
+                .awaitResult()
+        }.onSuccess {
+            mutableStatus.value = FirebaseSyncStatus.READY
+        }.onFailure {
+            mutableStatus.value = FirebaseSyncStatus.FAILED
+            throw it
+        }
+    }
+
+    suspend fun syncAll(workouts: List<WorkoutSession>) {
+        ensureAuthenticated()
+        workouts.forEach { syncWorkout(it) }
+    }
+
+    private suspend fun ensureAuthenticated(): String {
+        auth.currentUser?.uid?.let { return it }
+        mutableStatus.value = FirebaseSyncStatus.AUTHENTICATING
+        return runCatching {
+            auth.signInAnonymously().awaitResult<AuthResult>()
+                .user
+                ?.uid
+                ?: error("Anonymous authentication returned no user")
+        }.onSuccess {
+            mutableStatus.value = FirebaseSyncStatus.READY
+        }.onFailure {
+            mutableStatus.value = FirebaseSyncStatus.FAILED
+        }.getOrThrow()
+    }
+
+    companion object {
+        fun createOrNull(context: Context): FirebaseSyncService? =
+            FirebaseApp.getApps(context).firstOrNull()?.let(::FirebaseSyncService)
+    }
+}
+
+private fun WorkoutSession.toFirestoreMap(): Map<String, Any?> = mapOf(
+    "id" to id,
+    "type" to type.name,
+    "title" to title,
+    "startedAt" to startedAt.toString(),
+    "durationMinutes" to durationMinutes,
+    "rpe" to rpe,
+    "detail" to detail,
+    "sourceRecommendationId" to sourceRecommendationId,
+    "recommendationDate" to recommendationDate?.toString(),
+    "strengthSets" to strengthSets.map {
+        mapOf(
+            "id" to it.id,
+            "exercise" to it.exercise,
+            "weightKg" to it.weightKg,
+            "reps" to it.reps,
+            "rpe" to it.rpe,
+        )
+    },
+    "intervals" to intervals.map {
+        mapOf(
+            "id" to it.id,
+            "durationSeconds" to it.durationSeconds,
+            "distanceMeters" to it.distanceMeters,
+            "note" to it.note,
+        )
+    },
+    "updatedAt" to com.google.firebase.Timestamp.now(),
+)
+
+private suspend fun <T> Task<T>.awaitResult(): T =
+    suspendCancellableCoroutine { continuation ->
+        addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                @Suppress("UNCHECKED_CAST")
+                continuation.resume(task.result as T)
+            } else {
+                continuation.resumeWithException(
+                    task.exception ?: IllegalStateException("Firebase task failed"),
+                )
+            }
+        }
+    }
