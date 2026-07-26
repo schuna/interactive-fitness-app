@@ -13,6 +13,7 @@ import com.openai.interactivefitness.data.ActiveWorkoutStore
 import com.openai.interactivefitness.data.ErrorLogStore
 import com.openai.interactivefitness.data.FirebaseSyncService
 import com.openai.interactivefitness.data.FirebaseSyncStatus
+import com.openai.interactivefitness.data.HealthConnectManager
 import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.firestore.FirebaseFirestoreException
 import java.io.IOException
@@ -178,7 +179,7 @@ class FitnessViewModel(
         }
     }
 
-    fun finishActiveWorkout() {
+    fun finishActiveWorkout(healthConnectManager: HealthConnectManager? = null) {
         val active = activeWorkout.value ?: return
         timerJob?.cancel()
         val elapsedMinutes = java.time.Duration.between(
@@ -200,6 +201,18 @@ class FitnessViewModel(
                     )
                 repository.save(workout)
                 syncWorkoutSafely(workout)
+                if (healthConnectManager?.status() ==
+                    com.openai.interactivefitness.data.HealthConnectStatus.READY
+                ) {
+                    healthConnectManager.writeWorkout(workout)
+                    repository.save(
+                        workout.copy(
+                            healthConnectSyncState =
+                                com.openai.interactivefitness.domain.HealthConnectSyncState.EXPORTED,
+                            lastSyncedAt = LocalDateTime.now(),
+                        ),
+                    )
+                }
             }.onSuccess {
                 setActiveWorkout(null)
             }.onFailure {
@@ -270,6 +283,23 @@ class FitnessViewModel(
                 .onFailure { error ->
                     recordError(error.toFirebaseAppError("syncAll"))
                 }
+        }
+    }
+
+    fun importHealthConnect(manager: HealthConnectManager) {
+        viewModelScope.launch {
+            runCatching {
+                manager.readRecentWorkouts().forEach { repository.save(it) }
+            }.onFailure {
+                recordError(
+                    AppError(
+                        code = "HEALTH_CONNECT_IMPORT_FAILED",
+                        category = ErrorCategory.UNKNOWN,
+                        userMessage = "Health Connect 운동 기록을 가져오지 못했습니다.",
+                        operation = "importHealthConnect",
+                    ),
+                )
+            }
         }
     }
 

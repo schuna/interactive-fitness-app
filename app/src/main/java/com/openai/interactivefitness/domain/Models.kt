@@ -11,6 +11,17 @@ enum class WorkoutType(val label: String) {
     RECOVERY("회복"),
 }
 
+enum class WorkoutDataSource {
+    LOCAL,
+    HEALTH_CONNECT,
+}
+
+enum class HealthConnectSyncState {
+    NOT_SYNCED,
+    IMPORTED,
+    EXPORTED,
+}
+
 data class WorkoutSession(
     val id: String = UUID.randomUUID().toString(),
     val type: WorkoutType,
@@ -23,6 +34,11 @@ data class WorkoutSession(
     val intervals: List<WorkoutInterval> = emptyList(),
     val sourceRecommendationId: String? = null,
     val recommendationDate: LocalDate? = null,
+    val dataSource: WorkoutDataSource = WorkoutDataSource.LOCAL,
+    val externalRecordId: String? = null,
+    val sourceModifiedAt: LocalDateTime? = null,
+    val healthConnectSyncState: HealthConnectSyncState = HealthConnectSyncState.NOT_SYNCED,
+    val lastSyncedAt: LocalDateTime? = null,
 )
 
 data class StrengthSet(

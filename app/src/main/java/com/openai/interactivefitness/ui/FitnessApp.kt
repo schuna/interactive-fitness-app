@@ -1,5 +1,8 @@
 package com.openai.interactivefitness.ui
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +38,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +54,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.openai.interactivefitness.FitnessApplication
 import com.openai.interactivefitness.BuildConfig
+import com.openai.interactivefitness.data.HealthConnectManager
+import com.openai.interactivefitness.data.HealthConnectStatus
+import androidx.health.connect.client.PermissionController
 import com.openai.interactivefitness.domain.Recommendation
 import com.openai.interactivefitness.domain.ActiveWorkout
 import com.openai.interactivefitness.domain.StrengthSet
@@ -72,7 +79,24 @@ private enum class Destination(
 
 @Composable
 fun FitnessApp() {
-    val application = LocalContext.current.applicationContext as FitnessApplication
+    val context = LocalContext.current
+    val application = context.applicationContext as FitnessApplication
+    val healthConnectManager = remember { HealthConnectManager(context) }
+    var healthConnectStatus by remember {
+        mutableStateOf(HealthConnectStatus.PERMISSION_REQUIRED)
+    }
+    val healthPermissionLauncher = rememberLauncherForActivityResult(
+        PermissionController.createRequestPermissionResultContract(),
+    ) {
+        healthConnectStatus = if (it.containsAll(healthConnectManager.permissions)) {
+            HealthConnectStatus.READY
+        } else {
+            HealthConnectStatus.PERMISSION_REQUIRED
+        }
+    }
+    LaunchedEffect(Unit) {
+        healthConnectStatus = healthConnectManager.status()
+    }
     val viewModel: FitnessViewModel = viewModel(
         factory = FitnessViewModel.factory(
             application.workoutRepository,
@@ -122,7 +146,7 @@ fun FitnessApp() {
             onCompleteStep = viewModel::completeCurrentStep,
             onSkipRest = viewModel::skipRest,
             onAdjustRest = viewModel::adjustRest,
-            onFinish = viewModel::finishActiveWorkout,
+            onFinish = { viewModel.finishActiveWorkout(healthConnectManager) },
             onCancel = viewModel::cancelActiveWorkout,
         )
         return
@@ -146,6 +170,29 @@ fun FitnessApp() {
             when (selected.value) {
                 Destination.TODAY -> TodayScreen(
                     state = state,
+                    healthConnectStatus = healthConnectStatus,
+                    onHealthConnectImport = {
+                        viewModel.importHealthConnect(healthConnectManager)
+                    },
+                    onHealthConnectAction = {
+                        when (healthConnectStatus) {
+                            HealthConnectStatus.PERMISSION_REQUIRED ->
+                                healthPermissionLauncher.launch(healthConnectManager.permissions)
+                            HealthConnectStatus.UPDATE_REQUIRED -> {
+                                val packageName = HealthConnectManager.PROVIDER_PACKAGE_NAME
+                                context.startActivity(
+                                    Intent(
+                                        Intent.ACTION_VIEW,
+                                        Uri.parse(
+                                            "market://details?id=$packageName" +
+                                                "&url=healthconnect%3A%2F%2Fonboarding",
+                                        ),
+                                    ),
+                                )
+                            }
+                            else -> Unit
+                        }
+                    },
                     onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
                     onSorenessChanged = { viewModel.updateCondition(soreness = it) },
                     onPainChanged = { viewModel.updateCondition(hasPain = it) },
@@ -173,6 +220,9 @@ fun FitnessApp() {
 @Composable
 private fun TodayScreen(
     state: FitnessUiState,
+    healthConnectStatus: HealthConnectStatus,
+    onHealthConnectAction: () -> Unit,
+    onHealthConnectImport: () -> Unit,
     onFatigueChanged: (Int) -> Unit,
     onSorenessChanged: (Int) -> Unit,
     onPainChanged: (Boolean) -> Unit,
@@ -210,11 +260,55 @@ private fun TodayScreen(
             )
         }
         item {
+            HealthConnectCard(
+                status = healthConnectStatus,
+                onAction = onHealthConnectAction,
+                onImport = onHealthConnectImport,
+            )
+        }
+        item {
             state.recommendation?.let {
                 RecommendationCard(it, onStart, isCompleted)
             } ?: CircularProgressIndicator()
         }
         item { Spacer(Modifier.height(16.dp)) }
+    }
+}
+
+@Composable
+private fun HealthConnectCard(
+    status: HealthConnectStatus,
+    onAction: () -> Unit,
+    onImport: () -> Unit,
+) {
+    Card {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Health Connect", style = MaterialTheme.typography.titleMedium)
+            Text(
+                when (status) {
+                    HealthConnectStatus.UNAVAILABLE ->
+                        "이 기기에서는 지원되지 않습니다. 수동 기록은 계속 사용할 수 있습니다."
+                    HealthConnectStatus.UPDATE_REQUIRED ->
+                        "Health Connect 설치 또는 업데이트가 필요합니다."
+                    HealthConnectStatus.PERMISSION_REQUIRED ->
+                        "운동 기록을 연동하려면 데이터 접근 권한이 필요합니다."
+                    HealthConnectStatus.READY ->
+                        "연동 준비가 완료되었습니다."
+                },
+            )
+            when (status) {
+                HealthConnectStatus.UPDATE_REQUIRED ->
+                    Button(onClick = onAction) { Text("설치 또는 업데이트") }
+                HealthConnectStatus.PERMISSION_REQUIRED ->
+                    Button(onClick = onAction) { Text("권한 설정") }
+                HealthConnectStatus.READY ->
+                    Button(onClick = onImport) { Text("최근 운동 가져오기") }
+                else -> Unit
+            }
+        }
     }
 }
 

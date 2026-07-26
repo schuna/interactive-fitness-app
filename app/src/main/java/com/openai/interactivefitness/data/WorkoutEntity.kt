@@ -6,9 +6,14 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.openai.interactivefitness.domain.WorkoutSession
 import com.openai.interactivefitness.domain.WorkoutType
+import com.openai.interactivefitness.domain.WorkoutDataSource
+import com.openai.interactivefitness.domain.HealthConnectSyncState
 import java.time.LocalDateTime
 
-@Entity(tableName = "workout_sessions")
+@Entity(
+    tableName = "workout_sessions",
+    indices = [Index(value = ["externalRecordId"], unique = true)],
+)
 data class WorkoutEntity(
     @PrimaryKey val id: String,
     val type: String,
@@ -19,6 +24,11 @@ data class WorkoutEntity(
     val detail: String,
     val sourceRecommendationId: String?,
     val recommendationDate: String?,
+    val dataSource: String,
+    val externalRecordId: String?,
+    val sourceModifiedAt: String?,
+    val healthConnectSyncState: String,
+    val lastSyncedAt: String?,
 )
 
 fun WorkoutEntity.toDomain(): WorkoutSession = WorkoutSession(
@@ -31,6 +41,11 @@ fun WorkoutEntity.toDomain(): WorkoutSession = WorkoutSession(
     detail = detail,
     sourceRecommendationId = sourceRecommendationId,
     recommendationDate = recommendationDate?.let(java.time.LocalDate::parse),
+    dataSource = WorkoutDataSource.valueOf(dataSource),
+    externalRecordId = externalRecordId,
+    sourceModifiedAt = sourceModifiedAt?.let(LocalDateTime::parse),
+    healthConnectSyncState = HealthConnectSyncState.valueOf(healthConnectSyncState),
+    lastSyncedAt = lastSyncedAt?.let(LocalDateTime::parse),
 )
 
 fun WorkoutSession.toEntity(): WorkoutEntity = WorkoutEntity(
@@ -43,6 +58,11 @@ fun WorkoutSession.toEntity(): WorkoutEntity = WorkoutEntity(
     detail = detail,
     sourceRecommendationId = sourceRecommendationId,
     recommendationDate = recommendationDate?.toString(),
+    dataSource = dataSource.name,
+    externalRecordId = externalRecordId,
+    sourceModifiedAt = sourceModifiedAt?.toString(),
+    healthConnectSyncState = healthConnectSyncState.name,
+    lastSyncedAt = lastSyncedAt?.toString(),
 )
 
 @Entity(
