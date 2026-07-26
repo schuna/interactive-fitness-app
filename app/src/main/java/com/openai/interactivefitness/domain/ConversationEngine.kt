@@ -3,6 +3,7 @@ package com.openai.interactivefitness.domain
 sealed interface ConversationIntent {
     data object ShowMenu : ConversationIntent
     data object RecommendToday : ConversationIntent
+    data object StartRecommendation : ConversationIntent
     data object ShowDashboard : ConversationIntent
     data object ShowHistory : ConversationIntent
     data class QuickLog(val type: WorkoutType) : ConversationIntent
@@ -30,6 +31,11 @@ class ConversationEngine {
                     ConversationIntent.ShowMenu,
                     "오늘 운동 추천, 빠른 운동 기록, 기록 조회, 대시보드를 이용할 수 있어요.",
                 )
+            listOf("추천 운동 시작", "추천 시작", "운동 시작").any(normalized::contains) ->
+                ConversationResult(
+                    ConversationIntent.StartRecommendation,
+                    "오늘의 추천 운동을 시작할게요.",
+                )
             listOf("추천", "오늘 운동", "뭐 하지", "뭘 하지").any(normalized::contains) ->
                 ConversationResult(
                     ConversationIntent.RecommendToday,
@@ -40,7 +46,13 @@ class ConversationEngine {
                     ConversationIntent.ShowDashboard,
                     "최근 활동과 주간 목표를 확인해 보세요.",
                 )
-            listOf("기록 조회", "운동 기록", "히스토리", "최근 운동").any(normalized::contains) ->
+            listOf(
+                "기록 조회",
+                "기록 보기",
+                "운동 기록",
+                "히스토리",
+                "최근 운동",
+            ).any(normalized::contains) ->
                 ConversationResult(
                     ConversationIntent.ShowHistory,
                     "운동 기록 화면으로 이동할게요.",

@@ -1,3 +1,32 @@
 <resources>
-    <string name="app_name">오늘의 운동</string>
+    <string name="app_name">운동 코치</string>
+    <string name="navigation_open">전체 메뉴 열기</string>
+    <string name="coach_avatar_description">운동 코치</string>
+    <string name="chat_greeting">안녕하세요! 👋\n오늘의 컨디션과 운동 기록을 함께 관리해 드릴게요.\n무엇을 도와드릴까요?</string>
+    <string name="chat_help_title">무엇을 도와드릴까요?</string>
+    <string name="chat_more">더보기</string>
+    <string name="chat_message_placeholder">메시지를 입력하세요</string>
+    <string name="chat_send">메시지 보내기</string>
+    <string name="chat_action_today">오늘 운동</string>
+    <string name="chat_action_weight">웨이트 기록</string>
+    <string name="chat_action_weekly">이번 주 분석</string>
+    <string name="chat_action_history">기록 보기</string>
+    <string name="chat_recommendation_ready">운동 기록을 분석해 추천을 준비하고 있어요.</string>
+    <string name="chat_recommendation_completed">오늘 추천 완료</string>
+    <string name="chat_recommendation_start">추천 운동 시작</string>
+    <string name="condition_title">오늘의 컨디션을 알려주세요</string>
+    <string name="condition_description">입력한 상태는 오늘의 운동 추천에 바로 반영됩니다.</string>
+    <string name="condition_fatigue">피로도</string>
+    <string name="condition_soreness">근육통</string>
+    <string name="condition_pain">운동에 영향을 줄 수 있는 통증이 있어요</string>
+    <string name="condition_pain_notice">통증이 있으면 일반 운동 대신 회복 중심 안내를 제공합니다. 통증이 지속되면 전문가와 상담하세요.</string>
+    <string name="condition_apply">컨디션 반영하기</string>
+    <string name="condition_applied">컨디션을 반영했어요. 아래 추천을 확인해 주세요.</string>
+    <string name="condition_value">%1$d / 5 · %2$s</string>
+    <string name="condition_accessibility">%1$s %2$d / 5, %3$s</string>
+    <string name="level_very_low">매우 낮음</string>
+    <string name="level_low">낮음</string>
+    <string name="level_normal">보통</string>
+    <string name="level_high">높음</string>
+    <string name="level_very_high">매우 높음</string>
 </resources>

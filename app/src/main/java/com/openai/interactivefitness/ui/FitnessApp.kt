@@ -12,49 +12,79 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.EventNote
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.AutoGraph
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.FitnessCenter
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Spa
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.openai.interactivefitness.FitnessApplication
 import com.openai.interactivefitness.BuildConfig
+import com.openai.interactivefitness.R
 import com.openai.interactivefitness.data.HealthConnectManager
 import com.openai.interactivefitness.data.HealthConnectStatus
 import com.openai.interactivefitness.data.GoogleSignInManager
@@ -69,7 +99,11 @@ import com.openai.interactivefitness.domain.WorkoutDraft
 import com.openai.interactivefitness.domain.WorkoutInterval
 import com.openai.interactivefitness.domain.WorkoutSession
 import com.openai.interactivefitness.domain.WorkoutType
+import com.openai.interactivefitness.ui.chat.ChatConditionCard
+import com.openai.interactivefitness.ui.chat.ChatScreen
 import java.time.format.DateTimeFormatter
+import java.time.LocalTime
+import kotlinx.coroutines.launch
 
 private enum class Destination(
     val label: String,
@@ -125,8 +159,10 @@ fun FitnessApp() {
     )
     val state by viewModel.uiState.collectAsState()
     val selected = androidx.compose.runtime.saveable.rememberSaveable {
-        androidx.compose.runtime.mutableStateOf(Destination.TODAY)
+        androidx.compose.runtime.mutableStateOf(Destination.CHAT)
     }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val drawerScope = rememberCoroutineScope()
     var showDiagnostics by remember { mutableStateOf(false) }
 
     if (showDiagnostics) {
@@ -180,22 +216,84 @@ fun FitnessApp() {
         return
     }
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Spa,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge)
+                }
                 Destination.entries.forEach { destination ->
-                    NavigationBarItem(
+                    NavigationDrawerItem(
                         selected = selected.value == destination,
-                        onClick = { selected.value = destination },
-                        icon = { Icon(destination.icon, contentDescription = null) },
+                        onClick = {
+                            selected.value = destination
+                            drawerScope.launch { drawerState.close() }
+                        },
+                        icon = {
+                            Icon(
+                                destination.icon,
+                                contentDescription = destination.label,
+                            )
+                        },
                         label = { Text(destination.label) },
+                        modifier = Modifier.padding(horizontal = 12.dp),
                     )
                 }
             }
         },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (selected.value) {
+    ) {
+        Scaffold(
+            topBar = {
+                Surface(
+                    tonalElevation = 1.dp,
+                    shadowElevation = 0.dp,
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(
+                            onClick = { drawerScope.launch { drawerState.open() } },
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.Menu,
+                                contentDescription = stringResource(R.string.navigation_open),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Outlined.Spa,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            Text(
+                                stringResource(R.string.app_name),
+                                style = MaterialTheme.typography.titleLarge,
+                            )
+                        }
+                        Spacer(Modifier.size(48.dp))
+                    }
+                }
+            },
+        ) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                when (selected.value) {
                 Destination.TODAY -> TodayScreen(
                     state = state,
                     onGoogleSignIn = {
@@ -239,11 +337,16 @@ fun FitnessApp() {
                     onOpenDiagnostics = { showDiagnostics = true },
                 )
                 Destination.CHAT -> ChatScreen(
+                    condition = state.condition,
                     recommendation = state.recommendation,
+                    onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
+                    onSorenessChanged = { viewModel.updateCondition(soreness = it) },
+                    onPainChanged = { viewModel.updateCondition(hasPain = it) },
                     onQuickWorkout = viewModel::addQuickWorkout,
                     onStart = viewModel::startRecommendation,
                     isCompleted = state.isTodayRecommendationCompleted,
-                    onNavigate = { selected.value = it },
+                    onOpenDashboard = { selected.value = Destination.DASHBOARD },
+                    onOpenHistory = { selected.value = Destination.HISTORY },
                 )
                 Destination.DASHBOARD -> DashboardScreen(
                     state.weeklySummary,
@@ -262,6 +365,7 @@ fun FitnessApp() {
                         )
                     },
                 )
+                }
             }
         }
     }
@@ -580,133 +684,87 @@ private fun RecommendationCard(
 }
 
 @Composable
-private fun ChatScreen(
-    recommendation: Recommendation?,
-    onQuickWorkout: (WorkoutType) -> Unit,
-    onStart: () -> Unit,
-    isCompleted: Boolean,
-    onNavigate: (Destination) -> Unit,
-) {
-    val conversationEngine = remember { ConversationEngine() }
-    var input by remember { mutableStateOf("") }
-    var reply by remember {
-        mutableStateOf("메뉴 또는 원하는 작업을 입력해 주세요.")
-    }
-
-    fun submit() {
-        val result = conversationEngine.interpret(input)
-        reply = result.reply
-        when (val intent = result.intent) {
-            ConversationIntent.RecommendToday -> Unit
-            ConversationIntent.ShowDashboard -> onNavigate(Destination.DASHBOARD)
-            ConversationIntent.ShowHistory -> onNavigate(Destination.HISTORY)
-            is ConversationIntent.QuickLog -> onQuickWorkout(intent.type)
-            ConversationIntent.ShowMenu,
-            is ConversationIntent.Unknown,
-            -> Unit
-        }
-        input = ""
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item { Text("무엇을 도와드릴까요?", style = MaterialTheme.typography.headlineMedium) }
-        item {
-            Card {
-                Column(
-                    Modifier.fillMaxWidth().padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(reply)
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        label = { Text("메시지") },
-                        placeholder = { Text("예: 오늘 운동 추천") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                    )
-                    Button(onClick = ::submit, modifier = Modifier.fillMaxWidth()) {
-                        Text("보내기")
-                    }
-                }
-            }
-        }
-        item {
-            Card {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(recommendation?.reason ?: "추천을 준비하고 있어요.")
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AssistChip(
-                            onClick = onStart,
-                            enabled = !isCompleted,
-                            label = {
-                                Text(if (isCompleted) "오늘 추천 완료" else "추천 운동 시작")
-                            },
-                        )
-                    }
-                }
-            }
-        }
-        item { Text("빠른 기록", style = MaterialTheme.typography.titleMedium) }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(WorkoutType.STRENGTH, WorkoutType.RUNNING, WorkoutType.CYCLING).forEach {
-                    AssistChip(onClick = { onQuickWorkout(it) }, label = { Text(it.label) })
-                }
-            }
-        }
-        item {
-            Text(
-                "입력은 검증 가능한 앱 명령으로 변환됩니다. 불명확한 문장은 실행하지 않습니다.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-    }
-}
-
-@Composable
 private fun DashboardScreen(
     summary: WeeklySummary,
     healthSummary: com.openai.interactivefitness.data.HealthConnectSummary,
 ) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("이번 주", style = MaterialTheme.typography.headlineMedium)
-        Card {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${summary.sessions}회 · ${summary.totalMinutes}분")
-                LinearProgressIndicator(
-                    progress = { summary.goalProgress },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text("주 4회 목표 ${(summary.goalProgress * 100).toInt()}%")
-                Text(
-                    "활동 ${summary.activeDays}일 · 연속 ${summary.currentStreakDays}일",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-        Card {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Health Connect 최근 7일", style = MaterialTheme.typography.titleMedium)
-                Text("걸음 ${healthSummary.steps}보")
-                Text("거리 ${"%.1f".format(healthSummary.distanceMeters / 1_000.0)}km")
-                Text("소비 열량 ${healthSummary.activeCaloriesKcal}kcal")
-                healthSummary.averageHeartRate?.let {
-                    Text("평균 심박수 ${it}bpm")
+        item { Text("이번 주", style = MaterialTheme.typography.headlineMedium) }
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                ),
+            ) {
+                Column(
+                    Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("주간 요약", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "${summary.sessions}회 · ${summary.totalMinutes}분",
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
+                    LinearProgressIndicator(
+                        progress = { summary.goalProgress },
+                        modifier = Modifier.fillMaxWidth().height(10.dp),
+                    )
+                    Text("주 4회 목표 ${(summary.goalProgress * 100).toInt()}%")
+                    Text("활동 ${summary.activeDays}일 · 연속 ${summary.currentStreakDays}일")
                 }
             }
         }
-        Card {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("운동 균형", style = MaterialTheme.typography.titleMedium)
-                Text("근력 ${summary.strengthSessions}회")
-                Text("유산소 ${summary.cardioSessions}회")
+        if (summary.sessions == 0) {
+            item {
+                Card {
+                    Column(
+                        Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("아직 이번 주 운동이 없어요", style = MaterialTheme.typography.titleMedium)
+                        Text("대화 화면에서 추천 운동을 시작하거나 운동 기록을 추가해 보세요.")
+                    }
+                }
+            }
+        }
+        item {
+            Card {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("운동 균형", style = MaterialTheme.typography.titleMedium)
+                    Text("웨이트 ${summary.strengthSessions}회")
+                    LinearProgressIndicator(
+                        progress = {
+                            if (summary.sessions == 0) 0f
+                            else summary.strengthSessions.toFloat() / summary.sessions
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text("달리기·사이클 ${summary.cardioSessions}회")
+                    LinearProgressIndicator(
+                        progress = {
+                            if (summary.sessions == 0) 0f
+                            else summary.cardioSessions.toFloat() / summary.sessions
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+        item {
+            Card {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Health Connect 최근 7일", style = MaterialTheme.typography.titleMedium)
+                    Text("걸음 ${healthSummary.steps}보")
+                    Text("거리 ${"%.1f".format(healthSummary.distanceMeters / 1_000.0)}km")
+                    Text("소비 열량 ${healthSummary.activeCaloriesKcal}kcal")
+                    healthSummary.averageHeartRate?.let {
+                        Text("평균 심박수 ${it}bpm")
+                    }
+                }
             }
         }
     }
@@ -740,7 +798,10 @@ private fun WorkoutProgressScreen(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Row(
@@ -892,16 +953,27 @@ private fun HistoryScreen(
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            start = 20.dp,
+            top = 12.dp,
+            end = 20.dp,
+            bottom = 32.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
-            Spacer(Modifier.height(12.dp))
             Text("운동 기록", style = MaterialTheme.typography.headlineMedium)
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(WorkoutType.STRENGTH, WorkoutType.RUNNING, WorkoutType.CYCLING).forEach {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(
+                    listOf(
+                        WorkoutType.STRENGTH,
+                        WorkoutType.RUNNING,
+                        WorkoutType.CYCLING,
+                    ),
+                ) {
                     AssistChip(
                         onClick = {
                             editingWorkout = null
