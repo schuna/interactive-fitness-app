@@ -1,6 +1,9 @@
 <resources>
     <string name="app_name">운동 코치</string>
-    <string name="navigation_open">전체 메뉴 열기</string>
+    <string name="navigation_open">설정 열기</string>
+    <string name="settings_title">설정</string>
+    <string name="settings_account">계정 및 연동</string>
+    <string name="settings_diagnostics">진단 및 동기화</string>
     <string name="coach_avatar_description">운동 코치</string>
     <string name="chat_greeting">안녕하세요! 👋\n오늘의 컨디션과 운동 기록을 함께 관리해 드릴게요.\n무엇을 도와드릴까요?</string>
     <string name="chat_help_title">무엇을 도와드릴까요?</string>
@@ -14,6 +17,14 @@
     <string name="chat_recommendation_ready">운동 기록을 분석해 추천을 준비하고 있어요.</string>
     <string name="chat_recommendation_completed">오늘 추천 완료</string>
     <string name="chat_recommendation_start">추천 운동 시작</string>
+    <string name="chat_action_open_recommendation">추천 운동 보기</string>
+    <string name="chat_action_start_workout">운동 시작하기</string>
+    <string name="chat_action_open_dashboard">이번 주 분석 보기</string>
+    <string name="chat_action_open_history">운동 기록 보기</string>
+    <string name="chat_action_open_completed_workout">완료 운동 기록 보기</string>
+    <string name="chat_action_update_condition">컨디션 다시 입력</string>
+    <string name="chat_action_open_account_settings">계정 설정 열기</string>
+    <string name="chat_action_save_workout">운동 기록 입력</string>
     <string name="condition_title">오늘의 컨디션을 알려주세요</string>
     <string name="condition_description">입력한 상태는 오늘의 운동 추천에 바로 반영됩니다.</string>
     <string name="condition_fatigue">피로도</string>

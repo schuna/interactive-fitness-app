@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,7 +33,9 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.FitnessCenter
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Spa
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AlertDialog
@@ -70,6 +73,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
@@ -101,7 +105,10 @@ import com.openai.interactivefitness.domain.WorkoutSession
 import com.openai.interactivefitness.domain.WorkoutType
 import com.openai.interactivefitness.ui.chat.ChatConditionCard
 import com.openai.interactivefitness.ui.chat.ChatScreen
+import com.openai.interactivefitness.ui.chat.rememberChatConversationState
+import com.openai.interactivefitness.ui.theme.ThemeMode
 import java.time.format.DateTimeFormatter
+import java.time.LocalDate
 import java.time.LocalTime
 import kotlinx.coroutines.launch
 
@@ -113,11 +120,16 @@ private enum class Destination(
     CHAT("대화", Icons.Outlined.ChatBubbleOutline),
     DASHBOARD("대시보드", Icons.Outlined.AutoGraph),
     HISTORY("기록", Icons.AutoMirrored.Outlined.EventNote),
+    SETTINGS("설정", Icons.Outlined.Settings),
 }
 
 @Composable
-fun FitnessApp() {
+fun FitnessApp(
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
+) {
     val context = LocalContext.current
+    val compactScreen = LocalConfiguration.current.screenWidthDp <= 360
     val application = context.applicationContext as FitnessApplication
     val healthConnectManager = remember { HealthConnectManager(context) }
     val googleSignInManager = remember {
@@ -158,12 +170,40 @@ fun FitnessApp() {
         ),
     )
     val state by viewModel.uiState.collectAsState()
+    val conditionPreferences = remember {
+        context.getSharedPreferences("daily_condition", 0)
+    }
+    val today = LocalDate.now().toString()
+    var conditionSubmittedToday by remember {
+        mutableStateOf(conditionPreferences.getString("date", null) == today)
+    }
+    LaunchedEffect(Unit) {
+        if (conditionSubmittedToday) {
+            viewModel.updateCondition(
+                fatigue = conditionPreferences.getInt("fatigue", 3),
+                soreness = conditionPreferences.getInt("soreness", 2),
+                hasPain = conditionPreferences.getBoolean("has_pain", false),
+            )
+        }
+    }
     val selected = androidx.compose.runtime.saveable.rememberSaveable {
         androidx.compose.runtime.mutableStateOf(Destination.CHAT)
     }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
+    val chatConversationState = rememberChatConversationState()
     var showDiagnostics by remember { mutableStateOf(false) }
+    var pendingWorkoutDraftType by remember { mutableStateOf<WorkoutType?>(null) }
+
+    BackHandler(
+        enabled = drawerState.isOpen || selected.value != Destination.CHAT,
+    ) {
+        if (drawerState.isOpen) {
+            drawerScope.launch { drawerState.close() }
+        } else {
+            selected.value = Destination.CHAT
+        }
+    }
 
     if (showDiagnostics) {
         DiagnosticsDialog(
@@ -211,7 +251,14 @@ fun FitnessApp() {
                     },
                 )
             },
-            onCancel = viewModel::cancelActiveWorkout,
+            onCancel = {
+                viewModel.cancelActiveWorkout()
+                selected.value = Destination.CHAT
+            },
+            onBack = {
+                viewModel.cancelActiveWorkout()
+                selected.value = Destination.CHAT
+            },
         )
         return
     }
@@ -230,25 +277,28 @@ fun FitnessApp() {
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                     )
-                    Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge)
+                    Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.titleLarge)
                 }
-                Destination.entries.forEach { destination ->
-                    NavigationDrawerItem(
-                        selected = selected.value == destination,
-                        onClick = {
-                            selected.value = destination
-                            drawerScope.launch { drawerState.close() }
-                        },
-                        icon = {
-                            Icon(
-                                destination.icon,
-                                contentDescription = destination.label,
-                            )
-                        },
-                        label = { Text(destination.label) },
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                    )
-                }
+                NavigationDrawerItem(
+                    selected = selected.value == Destination.SETTINGS,
+                    onClick = {
+                        selected.value = Destination.SETTINGS
+                        drawerScope.launch { drawerState.close() }
+                    },
+                    icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+                    label = { Text(stringResource(R.string.settings_title)) },
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+                NavigationDrawerItem(
+                    selected = false,
+                    onClick = {
+                        showDiagnostics = true
+                        drawerScope.launch { drawerState.close() }
+                    },
+                    icon = { Icon(Icons.Outlined.BugReport, contentDescription = null) },
+                    label = { Text(stringResource(R.string.settings_diagnostics)) },
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
             }
         },
     ) {
@@ -259,7 +309,10 @@ fun FitnessApp() {
                     shadowElevation = 0.dp,
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(if (compactScreen) 64.dp else 72.dp)
+                            .padding(horizontal = if (compactScreen) 8.dp else 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         IconButton(
@@ -267,7 +320,7 @@ fun FitnessApp() {
                             modifier = Modifier.size(48.dp),
                         ) {
                             Icon(
-                                Icons.Outlined.Menu,
+                                Icons.Outlined.Settings,
                                 contentDescription = stringResource(R.string.navigation_open),
                             )
                         }
@@ -296,6 +349,62 @@ fun FitnessApp() {
                 when (selected.value) {
                 Destination.TODAY -> TodayScreen(
                     state = state,
+                    onStart = viewModel::startRecommendation,
+                    isCompleted = state.isTodayRecommendationCompleted,
+                    onOpenDiagnostics = { showDiagnostics = true },
+                    onOpenHistory = { selected.value = Destination.HISTORY },
+                )
+                Destination.CHAT -> ChatScreen(
+                    conversationState = chatConversationState,
+                    condition = state.condition,
+                    recommendation = state.recommendation,
+                    onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
+                    onSorenessChanged = { viewModel.updateCondition(soreness = it) },
+                    onPainChanged = { viewModel.updateCondition(hasPain = it) },
+                    isConditionSubmittedToday = conditionSubmittedToday,
+                    onConditionSubmitted = { submitted ->
+                        conditionPreferences.edit()
+                            .putString("date", today)
+                            .putInt("fatigue", submitted.fatigue)
+                            .putInt("soreness", submitted.soreness)
+                            .putBoolean("has_pain", submitted.hasPain)
+                            .apply()
+                        conditionSubmittedToday = true
+                    },
+                    onQuickWorkout = { type ->
+                        pendingWorkoutDraftType = type
+                        selected.value = Destination.HISTORY
+                    },
+                    onStart = viewModel::startRecommendation,
+                    isCompleted = state.isTodayRecommendationCompleted,
+                    onOpenRecommendation = { selected.value = Destination.TODAY },
+                    onOpenDashboard = { selected.value = Destination.DASHBOARD },
+                    onOpenHistory = { selected.value = Destination.HISTORY },
+                    onOpenSettings = { selected.value = Destination.SETTINGS },
+                )
+                Destination.DASHBOARD -> DashboardScreen(
+                    state.weeklySummary,
+                    state.healthConnectSummary,
+                )
+                Destination.HISTORY -> HistoryScreen(
+                    workouts = state.workouts,
+                    initialWorkoutType = pendingWorkoutDraftType,
+                    onInitialWorkoutTypeConsumed = { pendingWorkoutDraftType = null },
+                    onSave = viewModel::saveWorkout,
+                    onDelete = {
+                        viewModel.deleteWorkout(
+                            it,
+                            healthConnectManager.takeIf {
+                                state.firebaseSyncStatus !=
+                                    com.openai.interactivefitness.data.FirebaseSyncStatus.SIGNED_OUT
+                            },
+                        )
+                    },
+                )
+                Destination.SETTINGS -> SettingsScreen(
+                    themeMode = themeMode,
+                    onThemeModeChange = onThemeModeChange,
+                    firebaseStatus = state.firebaseSyncStatus,
                     onGoogleSignIn = {
                         viewModel.signInWithGoogle(googleSignInManager)
                     },
@@ -329,41 +438,6 @@ fun FitnessApp() {
                             else -> Unit
                         }
                     },
-                    onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
-                    onSorenessChanged = { viewModel.updateCondition(soreness = it) },
-                    onPainChanged = { viewModel.updateCondition(hasPain = it) },
-                    onStart = viewModel::startRecommendation,
-                    isCompleted = state.isTodayRecommendationCompleted,
-                    onOpenDiagnostics = { showDiagnostics = true },
-                )
-                Destination.CHAT -> ChatScreen(
-                    condition = state.condition,
-                    recommendation = state.recommendation,
-                    onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
-                    onSorenessChanged = { viewModel.updateCondition(soreness = it) },
-                    onPainChanged = { viewModel.updateCondition(hasPain = it) },
-                    onQuickWorkout = viewModel::addQuickWorkout,
-                    onStart = viewModel::startRecommendation,
-                    isCompleted = state.isTodayRecommendationCompleted,
-                    onOpenDashboard = { selected.value = Destination.DASHBOARD },
-                    onOpenHistory = { selected.value = Destination.HISTORY },
-                )
-                Destination.DASHBOARD -> DashboardScreen(
-                    state.weeklySummary,
-                    state.healthConnectSummary,
-                )
-                Destination.HISTORY -> HistoryScreen(
-                    workouts = state.workouts,
-                    onSave = viewModel::saveWorkout,
-                    onDelete = {
-                        viewModel.deleteWorkout(
-                            it,
-                            healthConnectManager.takeIf {
-                                state.firebaseSyncStatus !=
-                                    com.openai.interactivefitness.data.FirebaseSyncStatus.SIGNED_OUT
-                            },
-                        )
-                    },
                 )
                 }
             }
@@ -372,8 +446,10 @@ fun FitnessApp() {
 }
 
 @Composable
-private fun TodayScreen(
-    state: FitnessUiState,
+private fun SettingsScreen(
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
+    firebaseStatus: com.openai.interactivefitness.data.FirebaseSyncStatus,
     onGoogleSignIn: () -> Unit,
     onSignOut: () -> Unit,
     healthConnectStatus: HealthConnectStatus,
@@ -383,15 +459,103 @@ private fun TodayScreen(
     onExtendedHealthPermissions: () -> Unit,
     onHealthConnectAction: () -> Unit,
     onHealthConnectImport: () -> Unit,
-    onFatigueChanged: (Int) -> Unit,
-    onSorenessChanged: (Int) -> Unit,
-    onPainChanged: (Boolean) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = 16.dp,
+            vertical = 12.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Text("설정", style = MaterialTheme.typography.headlineMedium)
+        }
+        item {
+            AccountCard(
+                firebaseStatus = firebaseStatus,
+                onGoogleSignIn = onGoogleSignIn,
+                onSignOut = onSignOut,
+            )
+        }
+        item {
+            HealthConnectCard(
+                status = healthConnectStatus,
+                importMessage = healthConnectImportMessage,
+                hasExtendedPermissions = hasExtendedHealthPermissions,
+                hasExtendedPermissionSupport = hasExtendedHealthPermissionSupport,
+                onExtendedPermissions = onExtendedHealthPermissions,
+                onAction = onHealthConnectAction,
+                onImport = onHealthConnectImport,
+            )
+        }
+        item {
+            Card {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("테마", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "앱 화면의 밝기를 선택합니다. 선택한 설정은 다음 실행에도 유지됩니다.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        ThemeMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = themeMode == mode,
+                                onClick = { onThemeModeChange(mode) },
+                                label = {
+                                    Text(
+                                        when (mode) {
+                                            ThemeMode.SYSTEM -> "시스템"
+                                            ThemeMode.LIGHT -> "라이트"
+                                            ThemeMode.DARK -> "다크"
+                                        },
+                                    )
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Card {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("앱 정보", style = MaterialTheme.typography.titleMedium)
+                    Text("버전 ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                    Text(
+                        "대화형 운동 기록 및 추천 Android 앱",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        "데이터는 로그인 상태에 따라 기기 또는 Firebase에 저장됩니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TodayScreen(
+    state: FitnessUiState,
     onStart: () -> Unit,
     isCompleted: Boolean,
     onOpenDiagnostics: () -> Unit,
+    onOpenHistory: () -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -410,46 +574,34 @@ private fun TodayScreen(
             Text("기록과 컨디션을 바탕으로 준비했어요.")
         }
         item {
-            ConditionCard(
-                fatigue = state.condition.fatigue,
-                soreness = state.condition.soreness,
-                hasPain = state.condition.hasPain,
-                onFatigueChanged = onFatigueChanged,
-                onSorenessChanged = onSorenessChanged,
-                onPainChanged = onPainChanged,
-            )
-        }
-        item {
-            AccountCard(
-                firebaseStatus = state.firebaseSyncStatus,
-                onGoogleSignIn = onGoogleSignIn,
-                onSignOut = onSignOut,
-            )
-        }
-        if (state.firebaseSyncStatus in setOf(
-                com.openai.interactivefitness.data.FirebaseSyncStatus.READY,
-                com.openai.interactivefitness.data.FirebaseSyncStatus.SYNCING,
-                com.openai.interactivefitness.data.FirebaseSyncStatus.FAILED,
-            )
-        ) {
-            item {
-                HealthConnectCard(
-                    status = healthConnectStatus,
-                    importMessage = healthConnectImportMessage,
-                    hasExtendedPermissions = hasExtendedHealthPermissions,
-                    hasExtendedPermissionSupport = hasExtendedHealthPermissionSupport,
-                    onExtendedPermissions = onExtendedHealthPermissions,
-                    onAction = onHealthConnectAction,
-                    onImport = onHealthConnectImport,
-                )
+            when {
+                isCompleted -> CompletedRecommendationCard(onOpenHistory)
+                state.recommendation != null ->
+                    RecommendationCard(state.recommendation, onStart, false)
+                else -> CircularProgressIndicator()
             }
         }
-        item {
-            state.recommendation?.let {
-                RecommendationCard(it, onStart, isCompleted)
-            } ?: CircularProgressIndicator()
-        }
         item { Spacer(Modifier.height(16.dp)) }
+    }
+}
+
+@Composable
+private fun CompletedRecommendationCard(onOpenHistory: () -> Unit) {
+    Card {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                "✓ 오늘의 추천 운동 완료",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text("오늘은 새로운 추천을 만들지 않습니다. 완료한 운동 기록을 확인할 수 있어요.")
+            Button(onClick = onOpenHistory, modifier = Modifier.fillMaxWidth()) {
+                Text("완료 운동 기록 보기")
+            }
+        }
     }
 }
 
@@ -778,8 +930,10 @@ private fun WorkoutProgressScreen(
     onAdjustRest: (Int) -> Unit,
     onFinish: () -> Unit,
     onCancel: () -> Unit,
+    onBack: () -> Unit,
 ) {
     var confirmCancel by remember { mutableStateOf(false) }
+    BackHandler(onBack = onBack)
 
     if (confirmCancel) {
         AlertDialog(
@@ -801,7 +955,7 @@ private fun WorkoutProgressScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Row(
@@ -905,12 +1059,25 @@ private fun formatTimer(totalSeconds: Int): String =
 @Composable
 private fun HistoryScreen(
     workouts: List<WorkoutSession>,
+    initialWorkoutType: WorkoutType?,
+    onInitialWorkoutTypeConsumed: () -> Unit,
     onSave: (WorkoutDraft, WorkoutSession?) -> Unit,
     onDelete: (String) -> Unit,
 ) {
     var pendingDelete by remember { mutableStateOf<WorkoutSession?>(null) }
     var editingWorkout by remember { mutableStateOf<WorkoutSession?>(null) }
     var editorDraft by remember { mutableStateOf<WorkoutDraft?>(null) }
+
+    LaunchedEffect(initialWorkoutType) {
+        initialWorkoutType?.let { type ->
+            editingWorkout = null
+            editorDraft = WorkoutDraft(
+                type = type,
+                title = "${type.label} 운동",
+            )
+            onInitialWorkoutTypeConsumed()
+        }
+    }
 
     editorDraft?.let { draft ->
         WorkoutEditorDialog(

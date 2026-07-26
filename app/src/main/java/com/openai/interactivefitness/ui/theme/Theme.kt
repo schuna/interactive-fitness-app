@@ -90,6 +90,12 @@ private val FitnessShapes = Shapes(
     large = RoundedCornerShape(28.dp),
 )
 
+enum class ThemeMode {
+    SYSTEM,
+    LIGHT,
+    DARK,
+}
+
 @Composable
 fun FitnessTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),

@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +48,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -58,12 +62,51 @@ import com.openai.interactivefitness.domain.Recommendation
 import com.openai.interactivefitness.domain.WorkoutType
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.util.UUID
 
-private data class ChatMessage(
+data class ChatMessage(
+    val id: String = UUID.randomUUID().toString(),
     val text: String,
     val isUser: Boolean,
     val time: String = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm")),
+    val action: ChatMessageAction? = null,
 )
+
+enum class ChatMessageAction {
+    SHOW_RECOMMENDATION,
+    START_RECOMMENDATION,
+    SHOW_DASHBOARD,
+    SHOW_HISTORY,
+    SHOW_COMPLETED_WORKOUT,
+    UPDATE_CONDITION,
+    SHOW_ACCOUNT_SETTINGS,
+    LOG_STRENGTH,
+    LOG_RUNNING,
+    LOG_CYCLING,
+    LOG_RECOVERY,
+}
+
+@Stable
+class ChatConversationState {
+    val messages = mutableStateListOf<ChatMessage>()
+
+    fun addExchange(
+        userText: String,
+        coachText: String,
+        action: ChatMessageAction? = null,
+    ) {
+        messages += ChatMessage(text = userText, isUser = true)
+        messages += ChatMessage(text = coachText, isUser = false, action = action)
+    }
+
+    fun addCoachMessage(text: String) {
+        messages += ChatMessage(text = text, isUser = false)
+    }
+}
+
+@Composable
+fun rememberChatConversationState(): ChatConversationState =
+    remember { ChatConversationState() }
 
 private data class ChatQuickAction(
     val label: String,
@@ -74,25 +117,34 @@ private data class ChatQuickAction(
 
 @Composable
 fun ChatScreen(
+    conversationState: ChatConversationState,
     condition: DailyCondition,
     recommendation: Recommendation?,
     onFatigueChanged: (Int) -> Unit,
     onSorenessChanged: (Int) -> Unit,
     onPainChanged: (Boolean) -> Unit,
+    isConditionSubmittedToday: Boolean,
+    onConditionSubmitted: (DailyCondition) -> Unit,
     onQuickWorkout: (WorkoutType) -> Unit,
     onStart: () -> Unit,
     isCompleted: Boolean,
+    onOpenRecommendation: () -> Unit,
     onOpenDashboard: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val conversationEngine = remember { ConversationEngine() }
     var input by remember { mutableStateOf("") }
-    val greeting = stringResource(R.string.chat_greeting)
-    val messages = remember(greeting) {
-        mutableStateListOf(ChatMessage(text = greeting, isUser = false))
+    var showConditionEditor by remember {
+        mutableStateOf(!isConditionSubmittedToday)
     }
+    val greeting = stringResource(R.string.chat_greeting)
+    val messages = conversationState.messages
     val listState = rememberLazyListState()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val conditionAppliedMessage = stringResource(R.string.condition_applied)
+    val compactScreen = LocalConfiguration.current.screenWidthDp <= 360
     val quickActions = listOf(
         ChatQuickAction(
             stringResource(R.string.chat_action_today),
@@ -123,48 +175,86 @@ fun ChatScreen(
     fun submit(command: String = input) {
         if (command.isBlank()) return
         val result = conversationEngine.interpret(command)
-        messages += ChatMessage(command.trim(), isUser = true)
-        messages += ChatMessage(result.reply, isUser = false)
-        when (val intent = result.intent) {
-            ConversationIntent.RecommendToday -> Unit
-            ConversationIntent.StartRecommendation -> onStart()
-            ConversationIntent.ShowDashboard -> onOpenDashboard()
-            ConversationIntent.ShowHistory -> onOpenHistory()
-            is ConversationIntent.QuickLog -> onQuickWorkout(intent.type)
+        val action = when (val intent = result.intent) {
+            ConversationIntent.RecommendToday ->
+                if (isCompleted) {
+                    ChatMessageAction.SHOW_COMPLETED_WORKOUT
+                } else {
+                    ChatMessageAction.SHOW_RECOMMENDATION
+                }
+            ConversationIntent.StartRecommendation ->
+                if (isCompleted) {
+                    ChatMessageAction.SHOW_COMPLETED_WORKOUT
+                } else {
+                    ChatMessageAction.START_RECOMMENDATION
+                }
+            ConversationIntent.ShowDashboard -> ChatMessageAction.SHOW_DASHBOARD
+            ConversationIntent.ShowHistory -> ChatMessageAction.SHOW_HISTORY
+            ConversationIntent.UpdateCondition -> ChatMessageAction.UPDATE_CONDITION
+            ConversationIntent.ShowAccountSettings -> ChatMessageAction.SHOW_ACCOUNT_SETTINGS
+            is ConversationIntent.QuickLog -> when (intent.type) {
+                WorkoutType.STRENGTH -> ChatMessageAction.LOG_STRENGTH
+                WorkoutType.RUNNING -> ChatMessageAction.LOG_RUNNING
+                WorkoutType.CYCLING -> ChatMessageAction.LOG_CYCLING
+                WorkoutType.RECOVERY -> ChatMessageAction.LOG_RECOVERY
+            }
             ConversationIntent.ShowMenu,
             is ConversationIntent.Unknown,
-            -> Unit
+            -> null
         }
+        val reply = if (
+            isCompleted &&
+            result.intent in setOf(
+                ConversationIntent.RecommendToday,
+                ConversationIntent.StartRecommendation,
+            )
+        ) {
+            "오늘의 추천 운동을 이미 완료했어요. 완료한 운동 기록을 확인할까요?"
+        } else {
+            result.reply
+        }
+        conversationState.addExchange(command.trim(), reply, action)
         input = ""
+        focusManager.clearFocus()
+        keyboardController?.hide()
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    LaunchedEffect(messages.size, showConditionEditor) {
+        if (showConditionEditor && isConditionSubmittedToday) {
+            listState.animateScrollToItem(1)
+        } else if (messages.isNotEmpty()) {
+            val staticItemCount = if (showConditionEditor) 3 else 2
+            listState.animateScrollToItem(staticItemCount + messages.size - 1)
+        }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().imePadding()) {
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(20.dp),
+            contentPadding = PaddingValues(if (compactScreen) 12.dp else 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            items(messages) { ChatMessageBubble(it) }
             item {
+                ChatMessageBubble(ChatMessage(text = greeting, isUser = false))
+            }
+            if (showConditionEditor) item {
                 ChatConditionCard(
                     condition = condition,
                     onFatigueChanged = onFatigueChanged,
                     onSorenessChanged = onSorenessChanged,
                     onPainChanged = onPainChanged,
                     onApply = {
-                        messages += ChatMessage(conditionAppliedMessage, isUser = false)
+                        onConditionSubmitted(condition)
+                        conversationState.addCoachMessage(conditionAppliedMessage)
+                        showConditionEditor = false
                     },
                 )
             }
             item {
                 ChatMessageBubble(
                     ChatMessage(
-                        recommendation?.reason
+                        text = recommendation?.reason
                             ?: stringResource(R.string.chat_recommendation_ready),
                         isUser = false,
                     ),
@@ -177,19 +267,72 @@ fun ChatScreen(
                     onAction = onStart,
                 )
             }
+            items(messages, key = ChatMessage::id) { message ->
+                val actionLabel = when (message.action) {
+                    ChatMessageAction.SHOW_RECOMMENDATION ->
+                        stringResource(R.string.chat_action_open_recommendation)
+                    ChatMessageAction.START_RECOMMENDATION ->
+                        stringResource(R.string.chat_action_start_workout)
+                    ChatMessageAction.SHOW_DASHBOARD ->
+                        stringResource(R.string.chat_action_open_dashboard)
+                    ChatMessageAction.SHOW_HISTORY ->
+                        stringResource(R.string.chat_action_open_history)
+                    ChatMessageAction.SHOW_COMPLETED_WORKOUT ->
+                        stringResource(R.string.chat_action_open_completed_workout)
+                    ChatMessageAction.UPDATE_CONDITION ->
+                        stringResource(R.string.chat_action_update_condition)
+                    ChatMessageAction.SHOW_ACCOUNT_SETTINGS ->
+                        stringResource(R.string.chat_action_open_account_settings)
+                    ChatMessageAction.LOG_STRENGTH,
+                    ChatMessageAction.LOG_RUNNING,
+                    ChatMessageAction.LOG_CYCLING,
+                    ChatMessageAction.LOG_RECOVERY,
+                    -> stringResource(R.string.chat_action_save_workout)
+                    null -> null
+                }
+                ChatMessageBubble(
+                    message = message,
+                    actionLabel = actionLabel,
+                    onAction = {
+                        when (message.action) {
+                            ChatMessageAction.SHOW_RECOMMENDATION -> onOpenRecommendation()
+                            ChatMessageAction.START_RECOMMENDATION -> onStart()
+                            ChatMessageAction.SHOW_DASHBOARD -> onOpenDashboard()
+                            ChatMessageAction.SHOW_HISTORY -> onOpenHistory()
+                            ChatMessageAction.SHOW_COMPLETED_WORKOUT -> onOpenHistory()
+                            ChatMessageAction.UPDATE_CONDITION -> {
+                                showConditionEditor = true
+                            }
+                            ChatMessageAction.SHOW_ACCOUNT_SETTINGS -> onOpenSettings()
+                            ChatMessageAction.LOG_STRENGTH ->
+                                onQuickWorkout(WorkoutType.STRENGTH)
+                            ChatMessageAction.LOG_RUNNING ->
+                                onQuickWorkout(WorkoutType.RUNNING)
+                            ChatMessageAction.LOG_CYCLING ->
+                                onQuickWorkout(WorkoutType.CYCLING)
+                            ChatMessageAction.LOG_RECOVERY ->
+                                onQuickWorkout(WorkoutType.RECOVERY)
+                            null -> Unit
+                        }
+                    },
+                )
+            }
         }
 
         Surface(
             tonalElevation = 2.dp,
             shadowElevation = 8.dp,
             shape = MaterialTheme.shapes.large,
-            modifier = Modifier.fillMaxWidth().imePadding(),
+            modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(
+                        horizontal = if (compactScreen) 10.dp else 16.dp,
+                        vertical = 10.dp,
+                    ),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Row(
@@ -301,7 +444,9 @@ private fun ChatMessageBubble(
             Spacer(Modifier.size(8.dp))
         }
         Card(
-            modifier = Modifier.widthIn(max = 340.dp),
+            modifier = Modifier
+                .fillMaxWidth(if (LocalConfiguration.current.screenWidthDp <= 360) 0.9f else 0.86f)
+                .widthIn(max = 340.dp),
             shape = MaterialTheme.shapes.medium,
             colors = CardDefaults.cardColors(
                 containerColor = if (message.isUser) {

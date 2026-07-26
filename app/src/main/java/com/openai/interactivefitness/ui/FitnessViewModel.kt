@@ -80,16 +80,21 @@ class FitnessViewModel(
                 workouts,
                 currentCondition,
                 currentWorkout,
-            ->
+            -> 
+            val completedToday = workouts.any {
+                it.recommendationDate == LocalDate.now()
+            }
             FitnessUiState(
                 workouts = workouts,
                 condition = currentCondition,
-                recommendation = recommendationEngine.recommend(workouts, currentCondition),
+                recommendation = if (completedToday) {
+                    null
+                } else {
+                    recommendationEngine.recommend(workouts, currentCondition)
+                },
                 weeklySummary = weeklySummaryCalculator.calculate(workouts),
                 activeWorkout = currentWorkout,
-                isTodayRecommendationCompleted = workouts.any {
-                    it.recommendationDate == LocalDate.now()
-                },
+                isTodayRecommendationCompleted = completedToday,
             )
         }.combine(lastError) { state, error ->
             state.copy(error = error)
