@@ -19,7 +19,6 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
-import java.time.ZoneOffset
 
 enum class HealthConnectStatus {
     UNAVAILABLE,
@@ -131,6 +130,7 @@ class HealthConnectManager(private val context: Context) {
                     exerciseType = exerciseType,
                     title = workout.title,
                     notes = workout.detail,
+                    exerciseRoute = null,
                     metadata = Metadata.manualEntry(
                         clientRecordId = workout.id,
                         clientRecordVersion = 1,
