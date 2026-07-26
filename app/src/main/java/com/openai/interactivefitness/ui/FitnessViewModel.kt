@@ -46,6 +46,7 @@ data class FitnessUiState(
     val isTodayRecommendationCompleted: Boolean = false,
     val errorHistory: List<AppError> = emptyList(),
     val firebaseSyncStatus: FirebaseSyncStatus = FirebaseSyncStatus.UNCONFIGURED,
+    val healthConnectImportMessage: String? = null,
 )
 
 class FitnessViewModel(
@@ -61,6 +62,7 @@ class FitnessViewModel(
     private val errorHistory = MutableStateFlow(errorLogStore.load())
     private val firebaseStatus = firebaseSyncService?.status
         ?: MutableStateFlow(FirebaseSyncStatus.UNCONFIGURED)
+    private val healthConnectImportMessage = MutableStateFlow<String?>(null)
     private val activeWorkout = MutableStateFlow(
         restoreActiveWorkout() ?: activeWorkoutStore.load(),
     )
@@ -99,6 +101,8 @@ class FitnessViewModel(
             state.copy(errorHistory = history)
         }.combine(firebaseStatus) { state, status ->
             state.copy(firebaseSyncStatus = status)
+        }.combine(healthConnectImportMessage) { state, message ->
+            state.copy(healthConnectImportMessage = message)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FitnessUiState())
 
     init {
@@ -281,6 +285,7 @@ class FitnessViewModel(
         viewModelScope.launch {
             runCatching { service.syncAll(uiState.value.workouts) }
                 .onFailure { error ->
+                    service.scheduleRetry()
                     recordError(error.toFirebaseAppError("syncAll"))
                 }
         }
@@ -288,9 +293,20 @@ class FitnessViewModel(
 
     fun importHealthConnect(manager: HealthConnectManager) {
         viewModelScope.launch {
+            healthConnectImportMessage.value = "최근 운동을 확인하는 중입니다."
             runCatching {
-                manager.readRecentWorkouts().forEach { repository.save(it) }
+                val existingIds = uiState.value.workouts.mapTo(mutableSetOf()) { it.id }
+                val workouts = manager.readRecentWorkouts()
+                workouts.forEach { repository.save(it) }
+                workouts.count { it.id !in existingIds }
+            }.onSuccess { importedCount ->
+                healthConnectImportMessage.value = if (importedCount == 0) {
+                    "새로 가져올 운동 기록이 없습니다."
+                } else {
+                    "최근 운동 ${importedCount}개를 가져왔습니다."
+                }
             }.onFailure {
+                healthConnectImportMessage.value = "운동 기록 가져오기에 실패했습니다."
                 recordError(
                     AppError(
                         code = "HEALTH_CONNECT_IMPORT_FAILED",
@@ -307,6 +323,7 @@ class FitnessViewModel(
         val service = firebaseSyncService ?: return
         runCatching { service.syncWorkout(workout) }
             .onFailure { error ->
+                service.scheduleRetry()
                 recordError(error.toFirebaseAppError("syncWorkout"))
             }
     }

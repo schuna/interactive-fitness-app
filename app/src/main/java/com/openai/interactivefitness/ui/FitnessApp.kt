@@ -171,6 +171,7 @@ fun FitnessApp() {
                 Destination.TODAY -> TodayScreen(
                     state = state,
                     healthConnectStatus = healthConnectStatus,
+                    healthConnectImportMessage = state.healthConnectImportMessage,
                     onHealthConnectImport = {
                         viewModel.importHealthConnect(healthConnectManager)
                     },
@@ -221,6 +222,7 @@ fun FitnessApp() {
 private fun TodayScreen(
     state: FitnessUiState,
     healthConnectStatus: HealthConnectStatus,
+    healthConnectImportMessage: String?,
     onHealthConnectAction: () -> Unit,
     onHealthConnectImport: () -> Unit,
     onFatigueChanged: (Int) -> Unit,
@@ -262,6 +264,7 @@ private fun TodayScreen(
         item {
             HealthConnectCard(
                 status = healthConnectStatus,
+                importMessage = healthConnectImportMessage,
                 onAction = onHealthConnectAction,
                 onImport = onHealthConnectImport,
             )
@@ -278,6 +281,7 @@ private fun TodayScreen(
 @Composable
 private fun HealthConnectCard(
     status: HealthConnectStatus,
+    importMessage: String?,
     onAction: () -> Unit,
     onImport: () -> Unit,
 ) {
@@ -307,6 +311,9 @@ private fun HealthConnectCard(
                 HealthConnectStatus.READY ->
                     Button(onClick = onImport) { Text("최근 운동 가져오기") }
                 else -> Unit
+            }
+            importMessage?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall)
             }
         }
     }

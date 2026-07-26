@@ -1,6 +1,11 @@
 package com.openai.interactivefitness.data
 
 import android.content.Context
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import com.google.android.gms.tasks.Task
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.AuthResult
@@ -26,12 +31,28 @@ enum class FirebaseSyncStatus {
 class FirebaseSyncService private constructor(
     app: FirebaseApp,
 ) {
+    private val context = app.applicationContext
     private val auth = FirebaseAuth.getInstance(app)
     private val firestore = FirebaseFirestore.getInstance(app)
     private val mutableStatus = MutableStateFlow(
         if (auth.currentUser == null) FirebaseSyncStatus.SIGNED_OUT else FirebaseSyncStatus.READY,
     )
     val status: StateFlow<FirebaseSyncStatus> = mutableStatus.asStateFlow()
+
+    fun scheduleRetry() {
+        val request = OneTimeWorkRequestBuilder<FirebaseSyncWorker>()
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            )
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "firebase-workout-sync",
+            ExistingWorkPolicy.KEEP,
+            request,
+        )
+    }
 
     suspend fun syncWorkout(workout: WorkoutSession) {
         val uid = ensureAuthenticated()
