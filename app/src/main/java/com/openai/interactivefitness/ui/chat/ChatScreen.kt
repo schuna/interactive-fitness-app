@@ -17,6 +17,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -48,7 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -74,7 +76,6 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 data class ChatMessage(
@@ -324,24 +325,6 @@ fun ChatScreen(
         }
     }
 
-    val latestMessage = messages.lastOrNull()
-    LaunchedEffect(latestMessage?.id, latestMessage?.animateTyping, showConditionEditor) {
-        if (latestMessage?.animateTyping != true) return@LaunchedEffect
-
-        val latestItemIndex = (if (showConditionEditor) 2 else 1) + messages.lastIndex
-        snapshotFlow {
-            val layoutInfo = listState.layoutInfo
-            val latestItemSize = layoutInfo.visibleItemsInfo
-                .firstOrNull { it.index == latestItemIndex }
-                ?.size
-            layoutInfo.viewportEndOffset to latestItemSize
-        }
-            .distinctUntilChanged()
-            .collect {
-                listState.scrollToItem(latestItemIndex)
-            }
-    }
-
     Column(modifier = Modifier.fillMaxSize().imePadding()) {
         LazyColumn(
             state = listState,
@@ -397,6 +380,7 @@ fun ChatScreen(
                 ChatMessageBubble(
                     message = message,
                     actionLabel = actionLabel,
+                    keepFullyVisible = message.id == messages.lastOrNull()?.id,
                     onTypingComplete = {
                         conversationState.markTypingComplete(message.id)
                     },
@@ -528,9 +512,11 @@ private fun ChatMessageBubble(
     message: ChatMessage,
     actionLabel: String? = null,
     actionEnabled: Boolean = true,
+    keepFullyVisible: Boolean = false,
     onTypingComplete: () -> Unit = {},
     onAction: () -> Unit = {},
 ) {
+    val bringIntoViewRequester = remember(message.id) { BringIntoViewRequester() }
     var visibleCharacters by rememberSaveable(message.id) {
         mutableIntStateOf(if (message.animateTyping) 0 else message.text.length)
     }
@@ -552,8 +538,17 @@ private fun ChatMessageBubble(
         onTypingComplete()
     }
 
+    LaunchedEffect(visibleCharacters, isTyping, keepFullyVisible) {
+        if (keepFullyVisible) {
+            withFrameNanos { }
+            bringIntoViewRequester.bringIntoView()
+        }
+    }
+
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .bringIntoViewRequester(bringIntoViewRequester),
         horizontalArrangement = if (message.isUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top,
     ) {
