@@ -41,11 +41,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -70,6 +73,8 @@ import com.openai.interactivefitness.domain.WorkoutType
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 data class ChatMessage(
@@ -79,6 +84,7 @@ data class ChatMessage(
     val time: String = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm")),
     val action: ChatMessageAction? = null,
     val parameters: Map<String, String> = emptyMap(),
+    val animateTyping: Boolean = false,
 )
 
 enum class ChatMessageAction {
@@ -110,11 +116,19 @@ class ChatConversationState {
             isUser = false,
             action = action,
             parameters = parameters,
+            animateTyping = true,
         )
     }
 
     fun addCoachMessage(text: String) {
-        messages += ChatMessage(text = text, isUser = false)
+        messages += ChatMessage(text = text, isUser = false, animateTyping = true)
+    }
+
+    fun markTypingComplete(messageId: String) {
+        val index = messages.indexOfFirst { it.id == messageId }
+        if (index >= 0 && messages[index].animateTyping) {
+            messages[index] = messages[index].copy(animateTyping = false)
+        }
     }
 }
 
@@ -304,6 +318,24 @@ fun ChatScreen(
         }
     }
 
+    val latestMessage = messages.lastOrNull()
+    LaunchedEffect(latestMessage?.id, latestMessage?.animateTyping, showConditionEditor) {
+        if (latestMessage?.animateTyping != true) return@LaunchedEffect
+
+        val latestItemIndex = (if (showConditionEditor) 2 else 1) + messages.lastIndex
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val latestItemSize = layoutInfo.visibleItemsInfo
+                .firstOrNull { it.index == latestItemIndex }
+                ?.size
+            layoutInfo.viewportEndOffset to latestItemSize
+        }
+            .distinctUntilChanged()
+            .collect {
+                listState.scrollToItem(latestItemIndex)
+            }
+    }
+
     Column(modifier = Modifier.fillMaxSize().imePadding()) {
         LazyColumn(
             state = listState,
@@ -351,6 +383,9 @@ fun ChatScreen(
                 ChatMessageBubble(
                     message = message,
                     actionLabel = actionLabel,
+                    onTypingComplete = {
+                        conversationState.markTypingComplete(message.id)
+                    },
                     onAction = {
                         when (message.action) {
                             ChatMessageAction.SHOW_RECOMMENDATION -> onOpenRecommendation()
@@ -479,8 +514,28 @@ private fun ChatMessageBubble(
     message: ChatMessage,
     actionLabel: String? = null,
     actionEnabled: Boolean = true,
+    onTypingComplete: () -> Unit = {},
     onAction: () -> Unit = {},
 ) {
+    var visibleCharacters by rememberSaveable(message.id) {
+        mutableIntStateOf(if (message.animateTyping) 0 else message.text.length)
+    }
+    val isTyping = message.animateTyping && visibleCharacters < message.text.length
+
+    LaunchedEffect(message.id, message.text, message.animateTyping) {
+        if (!message.animateTyping || visibleCharacters >= message.text.length) {
+            return@LaunchedEffect
+        }
+
+        val charactersPerFrame = (message.text.length / 120).coerceAtLeast(1)
+        while (visibleCharacters < message.text.length) {
+            delay(COACH_TYPING_DELAY_MILLIS)
+            visibleCharacters = (visibleCharacters + charactersPerFrame)
+                .coerceAtMost(message.text.length)
+        }
+        onTypingComplete()
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (message.isUser) Arrangement.End else Arrangement.Start,
@@ -525,20 +580,32 @@ private fun ChatMessageBubble(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(message.text, style = MaterialTheme.typography.bodyLarge)
-                if (actionLabel != null) {
+                Text(
+                    text = if (isTyping) {
+                        message.text.take(visibleCharacters) + COACH_TYPING_CURSOR
+                    } else {
+                        message.text
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                if (actionLabel != null && !isTyping) {
                     AssistChip(
                         onClick = onAction,
                         enabled = actionEnabled,
                         label = { Text(actionLabel) },
                     )
                 }
-                Text(
-                    message.time,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (!isTyping) {
+                    Text(
+                        message.time,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
 }
+
+private const val COACH_TYPING_DELAY_MILLIS = 24L
+private const val COACH_TYPING_CURSOR = "▌"
