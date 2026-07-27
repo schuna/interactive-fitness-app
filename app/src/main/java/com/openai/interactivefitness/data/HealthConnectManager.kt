@@ -149,7 +149,7 @@ class HealthConnectManager(private val context: Context) {
                 id = record.metadata.clientRecordId
                     ?: "health-connect:${record.metadata.id}",
                 type = type,
-                title = record.title?.toString()?.takeIf(String::isNotBlank)
+                title = record.title?.takeIf(String::isNotBlank)
                     ?: "Health Connect ${type.label}",
                 startedAt = LocalDateTime.ofInstant(record.startTime, ZoneId.systemDefault()),
                 durationMinutes = Duration.between(record.startTime, record.endTime)

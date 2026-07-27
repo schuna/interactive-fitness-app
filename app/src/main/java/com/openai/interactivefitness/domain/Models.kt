@@ -154,7 +154,32 @@ data class CustomWorkoutPlan(
     val durationMinutes: Int,
     val exercises: List<String>,
     val plannedExercises: List<PlannedExercise> = emptyList(),
-)
+) {
+    fun executionSteps(): List<String> =
+        if (plannedExercises.isEmpty()) {
+            exercises
+        } else {
+            plannedExercises.flatMap { exercise ->
+                exercise.sets.mapIndexed { index, set ->
+                    buildString {
+                        append(exercise.exerciseName)
+                        append(" · ${index + 1}세트 · ")
+                        if (set.weightKg > 0) {
+                            append(
+                                if (set.weightKg % 1.0 == 0.0) {
+                                    "${set.weightKg.toInt()}kg"
+                                } else {
+                                    "${set.weightKg}kg"
+                                },
+                            )
+                            append(" × ")
+                        }
+                        append("${set.reps}회")
+                    }
+                }
+            }
+        }
+}
 
 data class PlannedExercise(
     val id: String = UUID.randomUUID().toString(),

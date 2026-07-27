@@ -12,12 +12,16 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WorkoutEntity::class,
         StrengthSetEntity::class,
         WorkoutIntervalEntity::class,
+        CustomWorkoutPlanEntity::class,
+        CustomPlanExerciseEntity::class,
+        CustomPlanSetEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun workoutDao(): WorkoutDao
+    abstract fun customWorkoutPlanDao(): CustomWorkoutPlanDao
 
     companion object {
         fun create(context: Context): AppDatabase =
@@ -25,7 +29,12 @@ abstract class AppDatabase : RoomDatabase() {
                 context.applicationContext,
                 AppDatabase::class.java,
                 "interactive-fitness.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+            ).addMigrations(
+                MIGRATION_1_2,
+                MIGRATION_2_3,
+                MIGRATION_3_4,
+                MIGRATION_4_5,
+            ).build()
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -96,6 +105,54 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE UNIQUE INDEX IF NOT EXISTS index_workout_sessions_externalRecordId " +
                         "ON workout_sessions(externalRecordId)",
+                )
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS custom_workout_plans (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        durationMinutes INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS custom_plan_exercises (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        planId TEXT NOT NULL,
+                        exerciseId TEXT NOT NULL,
+                        exerciseName TEXT NOT NULL,
+                        position INTEGER NOT NULL,
+                        restSeconds INTEGER NOT NULL,
+                        FOREIGN KEY(planId) REFERENCES custom_workout_plans(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_custom_plan_exercises_planId " +
+                        "ON custom_plan_exercises(planId)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS custom_plan_sets (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        planExerciseId TEXT NOT NULL,
+                        position INTEGER NOT NULL,
+                        weightKg REAL NOT NULL,
+                        reps INTEGER NOT NULL,
+                        FOREIGN KEY(planExerciseId) REFERENCES custom_plan_exercises(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_custom_plan_sets_planExerciseId " +
+                        "ON custom_plan_sets(planExerciseId)",
                 )
             }
         }

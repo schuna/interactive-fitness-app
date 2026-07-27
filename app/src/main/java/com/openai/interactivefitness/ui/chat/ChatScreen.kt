@@ -44,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,13 +58,19 @@ import androidx.compose.ui.unit.dp
 import com.openai.interactivefitness.R
 import com.openai.interactivefitness.domain.ConversationEngine
 import com.openai.interactivefitness.domain.ConversationIntent
+import com.openai.interactivefitness.domain.ConversationResult
 import com.openai.interactivefitness.domain.DailyCondition
 import com.openai.interactivefitness.domain.MenuCandidate
 import com.openai.interactivefitness.domain.MenuSuggestionEngine
+import com.openai.interactivefitness.domain.CustomPlanPrefill
+import com.openai.interactivefitness.domain.customPlanPrefill
+import com.openai.interactivefitness.domain.workoutTypeOrNull
+import com.openai.interactivefitness.data.GeminiIntentRouter
 import com.openai.interactivefitness.domain.WorkoutType
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import kotlinx.coroutines.launch
 
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
@@ -71,6 +78,7 @@ data class ChatMessage(
     val isUser: Boolean,
     val time: String = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm")),
     val action: ChatMessageAction? = null,
+    val parameters: Map<String, String> = emptyMap(),
 )
 
 enum class ChatMessageAction {
@@ -93,9 +101,15 @@ class ChatConversationState {
         userText: String,
         coachText: String,
         action: ChatMessageAction? = null,
+        parameters: Map<String, String> = emptyMap(),
     ) {
         messages += ChatMessage(text = userText, isUser = true)
-        messages += ChatMessage(text = coachText, isUser = false, action = action)
+        messages += ChatMessage(
+            text = coachText,
+            isUser = false,
+            action = action,
+            parameters = parameters,
+        )
     }
 
     fun addCoachMessage(text: String) {
@@ -117,14 +131,15 @@ private data class ChatQuickAction(
 @Composable
 fun ChatScreen(
     conversationState: ChatConversationState,
+    geminiIntentRouter: GeminiIntentRouter?,
     condition: DailyCondition,
     onFatigueChanged: (Int) -> Unit,
     onSorenessChanged: (Int) -> Unit,
     onPainChanged: (Boolean) -> Unit,
     isConditionSubmittedToday: Boolean,
     onConditionSubmitted: (DailyCondition) -> Unit,
-    onManualLog: () -> Unit,
-    onOpenCustomPlans: () -> Unit,
+    onManualLog: (WorkoutType?) -> Unit,
+    onOpenCustomPlans: (CustomPlanPrefill) -> Unit,
     onStart: () -> Unit,
     isCompleted: Boolean,
     onOpenRecommendation: () -> Unit,
@@ -134,6 +149,7 @@ fun ChatScreen(
 ) {
     val conversationEngine = remember { ConversationEngine() }
     val menuSuggestionEngine = remember { MenuSuggestionEngine() }
+    val coroutineScope = rememberCoroutineScope()
     var input by remember { mutableStateOf("") }
     var showConditionEditor by remember {
         mutableStateOf(false)
@@ -182,9 +198,11 @@ fun ChatScreen(
         quickActions.map { MenuCandidate(it.command, it.keywords.toSet()) },
     )
 
-    fun submit(command: String = input) {
-        if (command.isBlank()) return
-        val result = conversationEngine.interpret(command)
+    fun showResult(
+        command: String,
+        result: ConversationResult,
+        parameters: Map<String, String> = emptyMap(),
+    ) {
         val action = when (result.intent) {
             ConversationIntent.RecommendToday ->
                 if (isCompleted) {
@@ -219,10 +237,32 @@ fun ChatScreen(
         } else {
             result.reply
         }
-        conversationState.addExchange(command.trim(), reply, action)
+        conversationState.addExchange(command.trim(), reply, action, parameters)
+    }
+
+    fun submit(command: String = input) {
+        if (command.isBlank()) return
+        val trimmed = command.trim()
         input = ""
         focusManager.clearFocus()
         keyboardController?.hide()
+        val localResult = conversationEngine.interpret(trimmed)
+        if (localResult.intent !is ConversationIntent.Unknown || geminiIntentRouter == null) {
+            showResult(trimmed, localResult)
+            return
+        }
+        coroutineScope.launch {
+            val aiResult = runCatching { geminiIntentRouter.route(trimmed) }.getOrNull()
+            if (aiResult == null) {
+                showResult(trimmed, localResult)
+            } else {
+                showResult(
+                    trimmed,
+                    ConversationResult(intent = aiResult.intent, reply = aiResult.reply),
+                    aiResult.parameters,
+                )
+            }
+        }
     }
 
     LaunchedEffect(messages.size, showConditionEditor) {
@@ -291,8 +331,10 @@ fun ChatScreen(
                                 showConditionEditor = true
                             }
                             ChatMessageAction.SHOW_ACCOUNT_SETTINGS -> onOpenSettings()
-                            ChatMessageAction.MANUAL_LOG -> onManualLog()
-                            ChatMessageAction.CUSTOM_PLAN -> onOpenCustomPlans()
+                            ChatMessageAction.MANUAL_LOG ->
+                                onManualLog(message.parameters.workoutTypeOrNull())
+                            ChatMessageAction.CUSTOM_PLAN ->
+                                onOpenCustomPlans(message.parameters.customPlanPrefill())
                             null -> Unit
                         }
                     },

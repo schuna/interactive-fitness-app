@@ -98,6 +98,7 @@ import com.openai.interactivefitness.domain.ActiveWorkout
 import com.openai.interactivefitness.domain.ConversationEngine
 import com.openai.interactivefitness.domain.ConversationIntent
 import com.openai.interactivefitness.domain.CustomWorkoutPlan
+import com.openai.interactivefitness.domain.CustomPlanPrefill
 import com.openai.interactivefitness.domain.ExerciseCatalog
 import com.openai.interactivefitness.domain.PlannedExercise
 import com.openai.interactivefitness.domain.PlannedSet
@@ -201,6 +202,7 @@ fun FitnessApp(
     val chatConversationState = rememberChatConversationState()
     var showDiagnostics by remember { mutableStateOf(false) }
     var showCustomPlans by remember { mutableStateOf(false) }
+    var customPlanPrefill by remember { mutableStateOf(CustomPlanPrefill()) }
     var pendingWorkoutDraftType by remember { mutableStateOf<WorkoutType?>(null) }
 
     BackHandler(
@@ -225,13 +227,17 @@ fun FitnessApp(
     if (showCustomPlans) {
         CustomWorkoutPlansDialog(
             plans = state.customPlans,
+            prefill = customPlanPrefill,
             onSave = viewModel::saveCustomPlan,
             onDelete = viewModel::deleteCustomPlan,
             onStart = {
                 showCustomPlans = false
                 viewModel.startCustomPlan(it)
             },
-            onDismiss = { showCustomPlans = false },
+            onDismiss = {
+                showCustomPlans = false
+                customPlanPrefill = CustomPlanPrefill()
+            },
         )
     }
 
@@ -373,10 +379,14 @@ fun FitnessApp(
                     isCompleted = state.isTodayRecommendationCompleted,
                     onOpenDiagnostics = { showDiagnostics = true },
                     onOpenHistory = { selected.value = Destination.HISTORY },
-                    onOpenCustomPlans = { showCustomPlans = true },
+                    onOpenCustomPlans = {
+                        customPlanPrefill = CustomPlanPrefill()
+                        showCustomPlans = true
+                    },
                 )
                 Destination.CHAT -> ChatScreen(
                     conversationState = chatConversationState,
+                    geminiIntentRouter = application.geminiIntentRouter,
                     condition = state.condition,
                     onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
                     onSorenessChanged = { viewModel.updateCondition(soreness = it) },
@@ -391,11 +401,14 @@ fun FitnessApp(
                             .apply()
                         conditionSubmittedToday = true
                     },
-                    onManualLog = {
-                        pendingWorkoutDraftType = WorkoutType.STRENGTH
+                    onManualLog = { type ->
+                        pendingWorkoutDraftType = type ?: WorkoutType.STRENGTH
                         selected.value = Destination.HISTORY
                     },
-                    onOpenCustomPlans = { showCustomPlans = true },
+                    onOpenCustomPlans = { prefill ->
+                        customPlanPrefill = prefill
+                        showCustomPlans = true
+                    },
                     onStart = viewModel::startRecommendation,
                     isCompleted = state.isTodayRecommendationCompleted,
                     onOpenRecommendation = { selected.value = Destination.TODAY },
@@ -616,6 +629,7 @@ private fun TodayScreen(
 @Composable
 private fun CustomWorkoutPlansDialog(
     plans: List<CustomWorkoutPlan>,
+    prefill: CustomPlanPrefill,
     onSave: (CustomWorkoutPlan) -> Unit,
     onDelete: (String) -> Unit,
     onStart: (CustomWorkoutPlan) -> Unit,
@@ -623,10 +637,14 @@ private fun CustomWorkoutPlansDialog(
 ) {
     var editingId by remember { mutableStateOf<String?>(null) }
     var title by remember { mutableStateOf("") }
-    var duration by remember { mutableStateOf("30") }
+    var duration by remember(prefill.durationMinutes) {
+        mutableStateOf((prefill.durationMinutes ?: 30).toString())
+    }
     var type by remember { mutableStateOf(WorkoutType.STRENGTH) }
     var exercises by remember { mutableStateOf("") }
-    var showExerciseCatalog by remember { mutableStateOf(false) }
+    var showExerciseCatalog by remember(prefill) {
+        mutableStateOf(prefill.muscleGroup != null || prefill.equipment != null)
+    }
     var plannedExercises by remember {
         mutableStateOf(emptyList<PlannedExercise>())
     }
@@ -642,6 +660,8 @@ private fun CustomWorkoutPlansDialog(
             initiallySelectedIds = com.openai.interactivefitness.domain.ExerciseCatalog.exercises
                 .filter { it.name in selectedNames }
                 .mapTo(mutableSetOf()) { it.id },
+            initialMuscleGroup = prefill.muscleGroup,
+            initialEquipment = prefill.equipment,
             onConfirm = { selected ->
                 exercises = selected.joinToString("\n") { it.name }
                 plannedExercises = selected.map { definition ->

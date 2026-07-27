@@ -45,12 +45,18 @@ import com.openai.interactivefitness.domain.MuscleGroup
 @Composable
 fun ExerciseCatalogDialog(
     initiallySelectedIds: Set<String>,
+    initialMuscleGroup: MuscleGroup? = null,
+    initialEquipment: ExerciseEquipment? = null,
     onConfirm: (List<ExerciseDefinition>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    var muscleGroup by remember { mutableStateOf<MuscleGroup?>(null) }
-    var equipment by remember { mutableStateOf<ExerciseEquipment?>(null) }
+    var muscleGroup by remember(initialMuscleGroup) {
+        mutableStateOf(initialMuscleGroup)
+    }
+    var equipment by remember(initialEquipment) {
+        mutableStateOf(initialEquipment)
+    }
     var selectedIds by remember(initiallySelectedIds) {
         mutableStateOf(initiallySelectedIds)
     }

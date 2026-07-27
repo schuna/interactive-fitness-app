@@ -149,15 +149,35 @@ class FitnessViewModel(
     }
 
     fun saveCustomPlan(plan: CustomWorkoutPlan) {
-        customWorkoutPlanStore.save(plan)
+        viewModelScope.launch {
+            runCatching { customWorkoutPlanStore.save(plan) }
+                .onFailure {
+                    reportDatabaseError(
+                        "CUSTOM_PLAN_SAVE_FAILED",
+                        "커스텀 운동 계획을 저장하지 못했습니다.",
+                        "saveCustomPlan",
+                    )
+                }
+        }
     }
 
     fun deleteCustomPlan(id: String) {
-        customWorkoutPlanStore.delete(id)
+        viewModelScope.launch {
+            runCatching { customWorkoutPlanStore.delete(id) }
+                .onFailure {
+                    reportDatabaseError(
+                        "CUSTOM_PLAN_DELETE_FAILED",
+                        "커스텀 운동 계획을 삭제하지 못했습니다.",
+                        "deleteCustomPlan",
+                    )
+                }
+        }
     }
 
     fun startCustomPlan(plan: CustomWorkoutPlan) {
         timerJob?.cancel()
+        val steps = plan.executionSteps()
+        if (steps.isEmpty()) return
         setActiveWorkout(ActiveWorkout(
             recommendation = Recommendation(
                 id = "custom-${plan.id}",
@@ -167,10 +187,10 @@ class FitnessViewModel(
                 reason = "저장한 커스텀 운동 계획",
                 durationMinutes = plan.durationMinutes,
                 difficulty = "사용자 설정",
-                exercises = plan.exercises,
+                exercises = steps,
             ),
             startedAt = LocalDateTime.now(),
-            steps = plan.exercises,
+            steps = steps,
         ))
     }
 

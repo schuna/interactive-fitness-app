@@ -79,7 +79,10 @@ class FitnessAppSmokeTest {
 
     @Test
     fun backFromDashboardReturnsToChat() {
-        composeRule.onNodeWithText("이번 주 분석").performClick()
+        composeRule.onNodeWithText("메시지를 입력하세요")
+            .performClick()
+            .performTextInput("이번 주 분석")
+        composeRule.onNodeWithContentDescription("메시지 보내기").performClick()
         composeRule.onNodeWithText("이번 주 분석 보기").performClick()
         composeRule.onNodeWithText("이번 주").assertIsDisplayed()
 

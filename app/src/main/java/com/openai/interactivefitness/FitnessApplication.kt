@@ -13,8 +13,13 @@ import com.openai.interactivefitness.data.FirebaseSyncService
 import com.openai.interactivefitness.data.RoomWorkoutRepository
 import com.openai.interactivefitness.data.WorkoutRepository
 import com.openai.interactivefitness.data.CustomWorkoutPlanStore
+import com.openai.interactivefitness.data.GeminiIntentRouter
 
 class FitnessApplication : Application() {
+    private val database: AppDatabase by lazy {
+        AppDatabase.create(this)
+    }
+
     override fun onCreate() {
         super.onCreate()
         configureFirebaseAppCheck()
@@ -27,15 +32,19 @@ class FitnessApplication : Application() {
         ErrorLogStore(this)
     }
     val customWorkoutPlanStore: CustomWorkoutPlanStore by lazy {
-        CustomWorkoutPlanStore(this)
+        CustomWorkoutPlanStore(this, database.customWorkoutPlanDao())
     }
     val firebaseSyncService: FirebaseSyncService? by lazy {
         FirebaseSyncService.createOrNull(this)
     }
+    val geminiIntentRouter: GeminiIntentRouter? by lazy {
+        if (FirebaseApp.getApps(this).isEmpty()) null
+        else runCatching { GeminiIntentRouter() }.getOrNull()
+    }
 
     val workoutRepository: WorkoutRepository by lazy {
         RoomWorkoutRepository(
-            AppDatabase.create(this).workoutDao(),
+            database.workoutDao(),
         )
     }
 

@@ -2,79 +2,139 @@ package com.openai.interactivefitness.data
 
 import android.content.Context
 import com.openai.interactivefitness.domain.CustomWorkoutPlan
-import com.openai.interactivefitness.domain.WorkoutType
+import com.openai.interactivefitness.domain.ExerciseCatalog
 import com.openai.interactivefitness.domain.PlannedExercise
 import com.openai.interactivefitness.domain.PlannedSet
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import com.openai.interactivefitness.domain.WorkoutType
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
-import org.json.JSONObject
 
-class CustomWorkoutPlanStore(context: Context) {
+class CustomWorkoutPlanStore(
+    context: Context,
+    private val dao: CustomWorkoutPlanDao,
+) {
     private val preferences =
-        context.getSharedPreferences("custom_workout_plans", Context.MODE_PRIVATE)
-    private val mutablePlans = MutableStateFlow(load())
-    val plans: StateFlow<List<CustomWorkoutPlan>> = mutablePlans
+        context.getSharedPreferences(LEGACY_PREFERENCES, Context.MODE_PRIVATE)
+    private val migrationMutex = Mutex()
+    private var migrationChecked = false
 
-    fun save(plan: CustomWorkoutPlan) {
-        val updated = (mutablePlans.value.filterNot { it.id == plan.id } + plan)
-            .sortedBy(CustomWorkoutPlan::title)
-        persist(updated)
+    val plans: Flow<List<CustomWorkoutPlan>> = flow {
+        migrateLegacyPlans()
+        emitAll(
+            dao.observeAll().map { rows ->
+                rows.map { row ->
+                    val plannedExercises = row.exercises
+                        .sortedBy { it.exercise.position }
+                        .map { exerciseRow ->
+                            PlannedExercise(
+                                id = exerciseRow.exercise.id,
+                                exerciseId = exerciseRow.exercise.exerciseId,
+                                exerciseName = exerciseRow.exercise.exerciseName,
+                                restSeconds = exerciseRow.exercise.restSeconds,
+                                sets = exerciseRow.sets
+                                    .sortedBy(CustomPlanSetEntity::position)
+                                    .map {
+                                        PlannedSet(
+                                            id = it.id,
+                                            weightKg = it.weightKg,
+                                            reps = it.reps,
+                                        )
+                                    },
+                            )
+                        }
+                    CustomWorkoutPlan(
+                        id = row.plan.id,
+                        title = row.plan.title,
+                        type = WorkoutType.valueOf(row.plan.type),
+                        durationMinutes = row.plan.durationMinutes,
+                        exercises = plannedExercises.map(PlannedExercise::exerciseName),
+                        plannedExercises = plannedExercises,
+                    )
+                }
+            },
+        )
     }
 
-    fun delete(id: String) = persist(mutablePlans.value.filterNot { it.id == id })
+    suspend fun save(plan: CustomWorkoutPlan) {
+        saveToRoom(plan.withStructuredExercises())
+    }
 
-    private fun persist(plans: List<CustomWorkoutPlan>) {
-        val json = JSONArray()
-        plans.forEach { plan ->
-            json.put(JSONObject().apply {
-                put("id", plan.id)
-                put("title", plan.title)
-                put("type", plan.type.name)
-                put("durationMinutes", plan.durationMinutes)
-                put("exercises", JSONArray(plan.exercises))
-                put("plannedExercises", JSONArray().apply {
-                    plan.plannedExercises.forEach { exercise ->
-                        put(JSONObject().apply {
-                            put("id", exercise.id)
-                            put("exerciseId", exercise.exerciseId)
-                            put("exerciseName", exercise.exerciseName)
-                            put("restSeconds", exercise.restSeconds)
-                            put("sets", JSONArray().apply {
-                                exercise.sets.forEach { set ->
-                                    put(JSONObject().apply {
-                                        put("id", set.id)
-                                        put("weightKg", set.weightKg)
-                                        put("reps", set.reps)
-                                    })
-                                }
-                            })
-                        })
-                    }
-                })
-            })
+    suspend fun delete(id: String) {
+        dao.deleteById(id)
+    }
+
+    private suspend fun saveToRoom(plan: CustomWorkoutPlan) {
+        val exercises = plan.plannedExercises.mapIndexed { index, exercise ->
+            CustomPlanExerciseEntity(
+                id = exercise.id,
+                planId = plan.id,
+                exerciseId = exercise.exerciseId,
+                exerciseName = exercise.exerciseName,
+                position = index,
+                restSeconds = exercise.restSeconds,
+            )
         }
-        preferences.edit().putString(KEY, json.toString()).apply()
-        mutablePlans.value = plans
+        dao.replace(
+            plan = CustomWorkoutPlanEntity(
+                id = plan.id,
+                title = plan.title,
+                type = plan.type.name,
+                durationMinutes = plan.durationMinutes,
+            ),
+            exercises = exercises,
+            sets = plan.plannedExercises.flatMap { exercise ->
+                exercise.sets.mapIndexed { index, set ->
+                    CustomPlanSetEntity(
+                        id = set.id,
+                        planExerciseId = exercise.id,
+                        position = index,
+                        weightKg = set.weightKg,
+                        reps = set.reps,
+                    )
+                }
+            },
+        )
     }
 
-    private fun load(): List<CustomWorkoutPlan> = runCatching {
-        val json = JSONArray(preferences.getString(KEY, "[]"))
+    private suspend fun migrateLegacyPlans() {
+        migrationMutex.withLock {
+            if (migrationChecked) return@withLock
+            migrationChecked = true
+            if (dao.count() > 0) {
+                preferences.edit().remove(LEGACY_KEY).apply()
+                return@withLock
+            }
+            val legacyPlans = parseLegacyPlans()
+            legacyPlans.forEach { saveToRoom(it.withStructuredExercises()) }
+            if (legacyPlans.isNotEmpty()) {
+                preferences.edit().remove(LEGACY_KEY).apply()
+            }
+        }
+    }
+
+    private fun parseLegacyPlans(): List<CustomWorkoutPlan> = runCatching {
+        val json = JSONArray(preferences.getString(LEGACY_KEY, "[]"))
         (0 until json.length()).map { index ->
             val item = json.getJSONObject(index)
             val exercises = item.getJSONArray("exercises")
-            val plannedExercises = item.optJSONArray("plannedExercises")
+            val names = (0 until exercises.length()).map(exercises::getString)
+            val plannedJson = item.optJSONArray("plannedExercises")
             CustomWorkoutPlan(
                 id = item.getString("id"),
                 title = item.getString("title"),
                 type = WorkoutType.valueOf(item.getString("type")),
                 durationMinutes = item.getInt("durationMinutes"),
-                exercises = (0 until exercises.length()).map(exercises::getString),
-                plannedExercises = if (plannedExercises == null) {
+                exercises = names,
+                plannedExercises = if (plannedJson == null) {
                     emptyList()
                 } else {
-                    (0 until plannedExercises.length()).map { exerciseIndex ->
-                        val exercise = plannedExercises.getJSONObject(exerciseIndex)
+                    (0 until plannedJson.length()).map { exerciseIndex ->
+                        val exercise = plannedJson.getJSONObject(exerciseIndex)
                         val sets = exercise.getJSONArray("sets")
                         PlannedExercise(
                             id = exercise.getString("id"),
@@ -96,7 +156,22 @@ class CustomWorkoutPlanStore(context: Context) {
         }
     }.getOrDefault(emptyList())
 
+    private fun CustomWorkoutPlan.withStructuredExercises(): CustomWorkoutPlan {
+        if (plannedExercises.isNotEmpty()) return this
+        return copy(
+            plannedExercises = exercises.map { name ->
+                val catalogItem = ExerciseCatalog.exercises.firstOrNull { it.name == name }
+                PlannedExercise(
+                    exerciseId = catalogItem?.id ?: "custom-${name.hashCode()}",
+                    exerciseName = name,
+                    sets = List(3) { PlannedSet(weightKg = 10.0, reps = 10) },
+                )
+            },
+        )
+    }
+
     private companion object {
-        const val KEY = "plans"
+        const val LEGACY_PREFERENCES = "custom_workout_plans"
+        const val LEGACY_KEY = "plans"
     }
 }
