@@ -33,9 +33,30 @@ class RecommendationEngineTest {
             detail = "5 km",
         )
 
-        val result = engine.recommend(listOf(run), DailyCondition(), today)
+        val result = engine.recommend(listOf(run), DailyCondition(), today = today)
 
         assertEquals(WorkoutType.STRENGTH, result.type)
+    }
+
+    @Test
+    fun matchingSavedCustomPlanIsUsedInRecommendation() {
+        val plan = CustomWorkoutPlan(
+            id = "plan-1",
+            title = "내 전신 루틴",
+            type = WorkoutType.STRENGTH,
+            durationMinutes = 30,
+            exercises = listOf("스쿼트 3×8", "푸시업 3×10"),
+        )
+
+        val result = engine.recommend(
+            history = emptyList(),
+            condition = DailyCondition(availableMinutes = 45),
+            customPlans = listOf(plan),
+            today = today,
+        )
+
+        assertEquals("내 전신 루틴", result.title)
+        assertEquals(plan.exercises, result.exercises)
     }
 
     @Test

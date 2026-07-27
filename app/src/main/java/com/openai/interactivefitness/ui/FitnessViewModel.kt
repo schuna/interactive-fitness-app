@@ -11,6 +11,7 @@ import com.openai.interactivefitness.domain.AppError
 import com.openai.interactivefitness.domain.ErrorCategory
 import com.openai.interactivefitness.data.WorkoutRepository
 import com.openai.interactivefitness.data.ActiveWorkoutStore
+import com.openai.interactivefitness.data.CustomWorkoutPlanStore
 import com.openai.interactivefitness.data.ErrorLogStore
 import com.openai.interactivefitness.data.FirebaseSyncService
 import com.openai.interactivefitness.data.FirebaseSyncStatus
@@ -21,6 +22,7 @@ import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.firestore.FirebaseFirestoreException
 import java.io.IOException
 import com.openai.interactivefitness.domain.DailyCondition
+import com.openai.interactivefitness.domain.CustomWorkoutPlan
 import com.openai.interactivefitness.domain.ActiveWorkout
 import com.openai.interactivefitness.domain.Recommendation
 import com.openai.interactivefitness.domain.RecommendationEngine
@@ -52,11 +54,13 @@ data class FitnessUiState(
     val firebaseSyncStatus: FirebaseSyncStatus = FirebaseSyncStatus.UNCONFIGURED,
     val healthConnectImportMessage: String? = null,
     val healthConnectSummary: HealthConnectSummary = HealthConnectSummary(),
+    val customPlans: List<CustomWorkoutPlan> = emptyList(),
 )
 
 class FitnessViewModel(
     private val repository: WorkoutRepository,
     private val activeWorkoutStore: ActiveWorkoutStore,
+    private val customWorkoutPlanStore: CustomWorkoutPlanStore,
     private val errorLogStore: ErrorLogStore,
     private val firebaseSyncService: FirebaseSyncService?,
     private val savedStateHandle: SavedStateHandle,
@@ -76,10 +80,11 @@ class FitnessViewModel(
     private var timerJob: Job? = null
 
     val uiState: StateFlow<FitnessUiState> =
-        combine(repository.workouts, condition, activeWorkout) {
+        combine(repository.workouts, condition, activeWorkout, customWorkoutPlanStore.plans) {
                 workouts,
                 currentCondition,
                 currentWorkout,
+                customPlans,
             -> 
             val completedToday = workouts.any {
                 it.recommendationDate == LocalDate.now()
@@ -90,11 +95,12 @@ class FitnessViewModel(
                 recommendation = if (completedToday) {
                     null
                 } else {
-                    recommendationEngine.recommend(workouts, currentCondition)
+                    recommendationEngine.recommend(workouts, currentCondition, customPlans)
                 },
                 weeklySummary = weeklySummaryCalculator.calculate(workouts),
                 activeWorkout = currentWorkout,
                 isTodayRecommendationCompleted = completedToday,
+                customPlans = customPlans,
             )
         }.combine(lastError) { state, error ->
             state.copy(error = error)
@@ -139,6 +145,32 @@ class FitnessViewModel(
             recommendation = recommendation,
             startedAt = LocalDateTime.now(),
             steps = recommendation.exercises,
+        ))
+    }
+
+    fun saveCustomPlan(plan: CustomWorkoutPlan) {
+        customWorkoutPlanStore.save(plan)
+    }
+
+    fun deleteCustomPlan(id: String) {
+        customWorkoutPlanStore.delete(id)
+    }
+
+    fun startCustomPlan(plan: CustomWorkoutPlan) {
+        timerJob?.cancel()
+        setActiveWorkout(ActiveWorkout(
+            recommendation = Recommendation(
+                id = "custom-${plan.id}",
+                date = LocalDate.now(),
+                type = plan.type,
+                title = plan.title,
+                reason = "저장한 커스텀 운동 계획",
+                durationMinutes = plan.durationMinutes,
+                difficulty = "사용자 설정",
+                exercises = plan.exercises,
+            ),
+            startedAt = LocalDateTime.now(),
+            steps = plan.exercises,
         ))
     }
 
@@ -220,21 +252,6 @@ class FitnessViewModel(
     fun cancelActiveWorkout() {
         timerJob?.cancel()
         setActiveWorkout(null)
-    }
-
-    fun addQuickWorkout(type: WorkoutType) {
-        viewModelScope.launch {
-            val workout = WorkoutSession(
-                    type = type,
-                    title = "${type.label} 빠른 기록",
-                    startedAt = LocalDateTime.now().minusMinutes(30),
-                    durationMinutes = 30,
-                    rpe = 6,
-                    detail = "사용자가 빠른 기록으로 추가",
-                )
-            repository.save(workout)
-            syncWorkoutSafely(workout)
-        }
     }
 
     fun deleteWorkout(id: String, healthConnectManager: HealthConnectManager? = null) {
@@ -533,6 +550,7 @@ class FitnessViewModel(
         fun factory(
             repository: WorkoutRepository,
             activeWorkoutStore: ActiveWorkoutStore,
+            customWorkoutPlanStore: CustomWorkoutPlanStore,
             errorLogStore: ErrorLogStore,
             firebaseSyncService: FirebaseSyncService?,
         ): ViewModelProvider.Factory =
@@ -546,6 +564,7 @@ class FitnessViewModel(
                     return FitnessViewModel(
                         repository,
                         activeWorkoutStore,
+                        customWorkoutPlanStore,
                         errorLogStore,
                         firebaseSyncService,
                         extras.createSavedStateHandle(),

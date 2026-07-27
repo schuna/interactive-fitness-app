@@ -60,7 +60,7 @@ class FitnessAppSmokeTest {
 
         input.assertIsNotFocused()
         composeRule.onNodeWithText(
-            "오늘 운동 추천, 빠른 운동 기록, 기록 조회, 대시보드를 이용할 수 있어요.",
+            "추천 운동, 커스텀 운동 계획, 수동 기록 저장, 기록 보기, 주간 분석을 이용할 수 있어요.",
         ).assertIsDisplayed()
     }
 
@@ -73,7 +73,7 @@ class FitnessAppSmokeTest {
         }
 
         composeRule.onAllNodesWithText(
-            "오늘 운동 추천, 빠른 운동 기록, 기록 조회, 대시보드를 이용할 수 있어요.",
+            "추천 운동, 커스텀 운동 계획, 수동 기록 저장, 기록 보기, 주간 분석을 이용할 수 있어요.",
         ).assertCountEquals(2)
     }
 
@@ -92,10 +92,10 @@ class FitnessAppSmokeTest {
 
     @Test
     fun recommendationReplyProvidesNavigationButton() {
-        composeRule.onNodeWithText("오늘 운동").performClick()
+        composeRule.onNodeWithText("추천 운동").performClick()
         composeRule.onNodeWithText("추천 운동 보기").assertIsDisplayed().performClick()
 
-        composeRule.onNodeWithText("오늘의 운동").assertIsDisplayed()
+        composeRule.onNodeWithText("추천 운동").assertIsDisplayed()
     }
 
     @Test
@@ -117,11 +117,10 @@ class FitnessAppSmokeTest {
             .performTextInput("러닝 기록")
         composeRule.onNodeWithContentDescription("메시지 보내기").performClick()
 
-        composeRule.onNodeWithText("달리기 운동 기록을 직접 입력할까요?").assertIsDisplayed()
-        composeRule.onNodeWithText("운동 기록 입력").performClick()
+        composeRule.onNodeWithText("운동 내용을 직접 입력해 저장할까요?").assertIsDisplayed()
+        composeRule.onNodeWithText("수동 기록 입력").performClick()
 
         composeRule.onNodeWithText("새 운동 기록").assertIsDisplayed()
-        composeRule.onNodeWithText("달리기 운동").assertIsDisplayed()
     }
 
     @Test

@@ -8,3 +8,5 @@
 .cxx
 app/build
 app/google-services.json
+/.tools/
+/.gradle-user/

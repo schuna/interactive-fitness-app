@@ -58,7 +58,8 @@ import com.openai.interactivefitness.R
 import com.openai.interactivefitness.domain.ConversationEngine
 import com.openai.interactivefitness.domain.ConversationIntent
 import com.openai.interactivefitness.domain.DailyCondition
-import com.openai.interactivefitness.domain.Recommendation
+import com.openai.interactivefitness.domain.MenuCandidate
+import com.openai.interactivefitness.domain.MenuSuggestionEngine
 import com.openai.interactivefitness.domain.WorkoutType
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -80,10 +81,8 @@ enum class ChatMessageAction {
     SHOW_COMPLETED_WORKOUT,
     UPDATE_CONDITION,
     SHOW_ACCOUNT_SETTINGS,
-    LOG_STRENGTH,
-    LOG_RUNNING,
-    LOG_CYCLING,
-    LOG_RECOVERY,
+    MANUAL_LOG,
+    CUSTOM_PLAN,
 }
 
 @Stable
@@ -119,13 +118,13 @@ private data class ChatQuickAction(
 fun ChatScreen(
     conversationState: ChatConversationState,
     condition: DailyCondition,
-    recommendation: Recommendation?,
     onFatigueChanged: (Int) -> Unit,
     onSorenessChanged: (Int) -> Unit,
     onPainChanged: (Boolean) -> Unit,
     isConditionSubmittedToday: Boolean,
     onConditionSubmitted: (DailyCondition) -> Unit,
-    onQuickWorkout: (WorkoutType) -> Unit,
+    onManualLog: () -> Unit,
+    onOpenCustomPlans: () -> Unit,
     onStart: () -> Unit,
     isCompleted: Boolean,
     onOpenRecommendation: () -> Unit,
@@ -134,9 +133,10 @@ fun ChatScreen(
     onOpenSettings: () -> Unit,
 ) {
     val conversationEngine = remember { ConversationEngine() }
+    val menuSuggestionEngine = remember { MenuSuggestionEngine() }
     var input by remember { mutableStateOf("") }
     var showConditionEditor by remember {
-        mutableStateOf(!isConditionSubmittedToday)
+        mutableStateOf(false)
     }
     val greeting = stringResource(R.string.chat_greeting)
     val messages = conversationState.messages
@@ -147,16 +147,22 @@ fun ChatScreen(
     val compactScreen = LocalConfiguration.current.screenWidthDp <= 360
     val quickActions = listOf(
         ChatQuickAction(
-            stringResource(R.string.chat_action_today),
+            "추천 운동",
             "오늘 운동 추천",
             Icons.Outlined.Spa,
             listOf("오늘", "추천", "운동"),
         ),
         ChatQuickAction(
-            stringResource(R.string.chat_action_weight),
-            "웨이트 기록",
+            "커스텀 운동 계획",
+            "커스텀 운동 계획",
             Icons.Outlined.FitnessCenter,
-            listOf("웨이트", "근력", "기록"),
+            listOf("커스텀", "계획", "루틴"),
+        ),
+        ChatQuickAction(
+            "수동 기록 저장",
+            "수동 기록 저장",
+            Icons.Outlined.FitnessCenter,
+            listOf("수동", "기록", "저장", "입력"),
         ),
         ChatQuickAction(
             stringResource(R.string.chat_action_weekly),
@@ -171,11 +177,15 @@ fun ChatScreen(
             listOf("기록", "최근", "지난"),
         ),
     )
+    val suggestedCommand = menuSuggestionEngine.suggest(
+        input,
+        quickActions.map { MenuCandidate(it.command, it.keywords.toSet()) },
+    )
 
     fun submit(command: String = input) {
         if (command.isBlank()) return
         val result = conversationEngine.interpret(command)
-        val action = when (val intent = result.intent) {
+        val action = when (result.intent) {
             ConversationIntent.RecommendToday ->
                 if (isCompleted) {
                     ChatMessageAction.SHOW_COMPLETED_WORKOUT
@@ -192,12 +202,8 @@ fun ChatScreen(
             ConversationIntent.ShowHistory -> ChatMessageAction.SHOW_HISTORY
             ConversationIntent.UpdateCondition -> ChatMessageAction.UPDATE_CONDITION
             ConversationIntent.ShowAccountSettings -> ChatMessageAction.SHOW_ACCOUNT_SETTINGS
-            is ConversationIntent.QuickLog -> when (intent.type) {
-                WorkoutType.STRENGTH -> ChatMessageAction.LOG_STRENGTH
-                WorkoutType.RUNNING -> ChatMessageAction.LOG_RUNNING
-                WorkoutType.CYCLING -> ChatMessageAction.LOG_CYCLING
-                WorkoutType.RECOVERY -> ChatMessageAction.LOG_RECOVERY
-            }
+            ConversationIntent.ManualLog -> ChatMessageAction.MANUAL_LOG
+            ConversationIntent.CustomWorkoutPlan -> ChatMessageAction.CUSTOM_PLAN
             ConversationIntent.ShowMenu,
             is ConversationIntent.Unknown,
             -> null
@@ -223,7 +229,7 @@ fun ChatScreen(
         if (showConditionEditor && isConditionSubmittedToday) {
             listState.animateScrollToItem(1)
         } else if (messages.isNotEmpty()) {
-            val staticItemCount = if (showConditionEditor) 3 else 2
+            val staticItemCount = if (showConditionEditor) 2 else 1
             listState.animateScrollToItem(staticItemCount + messages.size - 1)
         }
     }
@@ -251,22 +257,6 @@ fun ChatScreen(
                     },
                 )
             }
-            item {
-                ChatMessageBubble(
-                    ChatMessage(
-                        text = recommendation?.reason
-                            ?: stringResource(R.string.chat_recommendation_ready),
-                        isUser = false,
-                    ),
-                    actionLabel = if (isCompleted) {
-                        stringResource(R.string.chat_recommendation_completed)
-                    } else {
-                        stringResource(R.string.chat_recommendation_start)
-                    },
-                    actionEnabled = !isCompleted,
-                    onAction = onStart,
-                )
-            }
             items(messages, key = ChatMessage::id) { message ->
                 val actionLabel = when (message.action) {
                     ChatMessageAction.SHOW_RECOMMENDATION ->
@@ -283,11 +273,8 @@ fun ChatScreen(
                         stringResource(R.string.chat_action_update_condition)
                     ChatMessageAction.SHOW_ACCOUNT_SETTINGS ->
                         stringResource(R.string.chat_action_open_account_settings)
-                    ChatMessageAction.LOG_STRENGTH,
-                    ChatMessageAction.LOG_RUNNING,
-                    ChatMessageAction.LOG_CYCLING,
-                    ChatMessageAction.LOG_RECOVERY,
-                    -> stringResource(R.string.chat_action_save_workout)
+                    ChatMessageAction.MANUAL_LOG -> "수동 기록 입력"
+                    ChatMessageAction.CUSTOM_PLAN -> "커스텀 계획 열기"
                     null -> null
                 }
                 ChatMessageBubble(
@@ -304,14 +291,8 @@ fun ChatScreen(
                                 showConditionEditor = true
                             }
                             ChatMessageAction.SHOW_ACCOUNT_SETTINGS -> onOpenSettings()
-                            ChatMessageAction.LOG_STRENGTH ->
-                                onQuickWorkout(WorkoutType.STRENGTH)
-                            ChatMessageAction.LOG_RUNNING ->
-                                onQuickWorkout(WorkoutType.RUNNING)
-                            ChatMessageAction.LOG_CYCLING ->
-                                onQuickWorkout(WorkoutType.CYCLING)
-                            ChatMessageAction.LOG_RECOVERY ->
-                                onQuickWorkout(WorkoutType.RECOVERY)
+                            ChatMessageAction.MANUAL_LOG -> onManualLog()
+                            ChatMessageAction.CUSTOM_PLAN -> onOpenCustomPlans()
                             null -> Unit
                         }
                     },
@@ -353,8 +334,7 @@ fun ChatScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     quickActions.forEach { action ->
-                        val highlighted = input.isNotBlank() &&
-                            action.keywords.any { input.contains(it, ignoreCase = true) }
+                        val highlighted = action.command == suggestedCommand
                         FilterChip(
                             selected = highlighted,
                             onClick = { submit(action.command) },
@@ -450,9 +430,14 @@ private fun ChatMessageBubble(
             shape = MaterialTheme.shapes.medium,
             colors = CardDefaults.cardColors(
                 containerColor = if (message.isUser) {
-                    MaterialTheme.colorScheme.primaryContainer
+                    MaterialTheme.colorScheme.primary
                 } else {
-                    MaterialTheme.colorScheme.surfaceVariant
+                    MaterialTheme.colorScheme.secondaryContainer
+                },
+                contentColor = if (message.isUser) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSecondaryContainer
                 },
             ),
         ) {

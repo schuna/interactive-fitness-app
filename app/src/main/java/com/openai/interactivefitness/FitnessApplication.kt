@@ -12,6 +12,7 @@ import com.openai.interactivefitness.data.ErrorLogStore
 import com.openai.interactivefitness.data.FirebaseSyncService
 import com.openai.interactivefitness.data.RoomWorkoutRepository
 import com.openai.interactivefitness.data.WorkoutRepository
+import com.openai.interactivefitness.data.CustomWorkoutPlanStore
 
 class FitnessApplication : Application() {
     override fun onCreate() {
@@ -24,6 +25,9 @@ class FitnessApplication : Application() {
     }
     val errorLogStore: ErrorLogStore by lazy {
         ErrorLogStore(this)
+    }
+    val customWorkoutPlanStore: CustomWorkoutPlanStore by lazy {
+        CustomWorkoutPlanStore(this)
     }
     val firebaseSyncService: FirebaseSyncService? by lazy {
         FirebaseSyncService.createOrNull(this)

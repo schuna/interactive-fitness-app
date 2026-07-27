@@ -147,6 +147,32 @@ data class Recommendation(
     val safetyNotice: String? = null,
 )
 
+data class CustomWorkoutPlan(
+    val id: String = UUID.randomUUID().toString(),
+    val title: String,
+    val type: WorkoutType,
+    val durationMinutes: Int,
+    val exercises: List<String>,
+    val plannedExercises: List<PlannedExercise> = emptyList(),
+)
+
+data class PlannedExercise(
+    val id: String = UUID.randomUUID().toString(),
+    val exerciseId: String,
+    val exerciseName: String,
+    val sets: List<PlannedSet>,
+    val restSeconds: Int = 60,
+) {
+    val totalVolumeKg: Double
+        get() = sets.sumOf { it.weightKg * it.reps }
+}
+
+data class PlannedSet(
+    val id: String = UUID.randomUUID().toString(),
+    val weightKg: Double = 0.0,
+    val reps: Int = 10,
+)
+
 data class WeeklySummary(
     val sessions: Int,
     val totalMinutes: Int,

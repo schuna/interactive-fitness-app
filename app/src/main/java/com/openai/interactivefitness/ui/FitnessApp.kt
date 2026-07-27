@@ -97,6 +97,10 @@ import com.openai.interactivefitness.domain.Recommendation
 import com.openai.interactivefitness.domain.ActiveWorkout
 import com.openai.interactivefitness.domain.ConversationEngine
 import com.openai.interactivefitness.domain.ConversationIntent
+import com.openai.interactivefitness.domain.CustomWorkoutPlan
+import com.openai.interactivefitness.domain.ExerciseCatalog
+import com.openai.interactivefitness.domain.PlannedExercise
+import com.openai.interactivefitness.domain.PlannedSet
 import com.openai.interactivefitness.domain.StrengthSet
 import com.openai.interactivefitness.domain.WeeklySummary
 import com.openai.interactivefitness.domain.WorkoutDraft
@@ -106,6 +110,8 @@ import com.openai.interactivefitness.domain.WorkoutType
 import com.openai.interactivefitness.ui.chat.ChatConditionCard
 import com.openai.interactivefitness.ui.chat.ChatScreen
 import com.openai.interactivefitness.ui.chat.rememberChatConversationState
+import com.openai.interactivefitness.ui.custom.ExerciseCatalogDialog
+import com.openai.interactivefitness.ui.custom.ExerciseSetEditorDialog
 import com.openai.interactivefitness.ui.theme.ThemeMode
 import java.time.format.DateTimeFormatter
 import java.time.LocalDate
@@ -165,6 +171,7 @@ fun FitnessApp(
         factory = FitnessViewModel.factory(
             application.workoutRepository,
             application.activeWorkoutStore,
+            application.customWorkoutPlanStore,
             application.errorLogStore,
             application.firebaseSyncService,
         ),
@@ -193,6 +200,7 @@ fun FitnessApp(
     val drawerScope = rememberCoroutineScope()
     val chatConversationState = rememberChatConversationState()
     var showDiagnostics by remember { mutableStateOf(false) }
+    var showCustomPlans by remember { mutableStateOf(false) }
     var pendingWorkoutDraftType by remember { mutableStateOf<WorkoutType?>(null) }
 
     BackHandler(
@@ -212,6 +220,18 @@ fun FitnessApp(
             onSync = viewModel::syncNow,
             onClear = viewModel::clearErrorHistory,
             onDismiss = { showDiagnostics = false },
+        )
+    }
+    if (showCustomPlans) {
+        CustomWorkoutPlansDialog(
+            plans = state.customPlans,
+            onSave = viewModel::saveCustomPlan,
+            onDelete = viewModel::deleteCustomPlan,
+            onStart = {
+                showCustomPlans = false
+                viewModel.startCustomPlan(it)
+            },
+            onDismiss = { showCustomPlans = false },
         )
     }
 
@@ -353,11 +373,11 @@ fun FitnessApp(
                     isCompleted = state.isTodayRecommendationCompleted,
                     onOpenDiagnostics = { showDiagnostics = true },
                     onOpenHistory = { selected.value = Destination.HISTORY },
+                    onOpenCustomPlans = { showCustomPlans = true },
                 )
                 Destination.CHAT -> ChatScreen(
                     conversationState = chatConversationState,
                     condition = state.condition,
-                    recommendation = state.recommendation,
                     onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
                     onSorenessChanged = { viewModel.updateCondition(soreness = it) },
                     onPainChanged = { viewModel.updateCondition(hasPain = it) },
@@ -371,10 +391,11 @@ fun FitnessApp(
                             .apply()
                         conditionSubmittedToday = true
                     },
-                    onQuickWorkout = { type ->
-                        pendingWorkoutDraftType = type
+                    onManualLog = {
+                        pendingWorkoutDraftType = WorkoutType.STRENGTH
                         selected.value = Destination.HISTORY
                     },
+                    onOpenCustomPlans = { showCustomPlans = true },
                     onStart = viewModel::startRecommendation,
                     isCompleted = state.isTodayRecommendationCompleted,
                     onOpenRecommendation = { selected.value = Destination.TODAY },
@@ -553,6 +574,7 @@ private fun TodayScreen(
     isCompleted: Boolean,
     onOpenDiagnostics: () -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenCustomPlans: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -565,7 +587,7 @@ private fun TodayScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "오늘의 운동",
+                    "추천 운동",
                     style = MaterialTheme.typography.headlineMedium,
                     modifier = Modifier.weight(1f),
                 )
@@ -581,8 +603,235 @@ private fun TodayScreen(
                 else -> CircularProgressIndicator()
             }
         }
+        item {
+            TextButton(
+                onClick = onOpenCustomPlans,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("대신 커스텀 운동 계획 선택") }
+        }
         item { Spacer(Modifier.height(16.dp)) }
     }
+}
+
+@Composable
+private fun CustomWorkoutPlansDialog(
+    plans: List<CustomWorkoutPlan>,
+    onSave: (CustomWorkoutPlan) -> Unit,
+    onDelete: (String) -> Unit,
+    onStart: (CustomWorkoutPlan) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var title by remember { mutableStateOf("") }
+    var duration by remember { mutableStateOf("30") }
+    var type by remember { mutableStateOf(WorkoutType.STRENGTH) }
+    var exercises by remember { mutableStateOf("") }
+    var showExerciseCatalog by remember { mutableStateOf(false) }
+    var plannedExercises by remember {
+        mutableStateOf(emptyList<PlannedExercise>())
+    }
+    var editingExerciseId by remember { mutableStateOf<String?>(null) }
+    val parsedExercises = exercises.lines().map(String::trim).filter(String::isNotBlank)
+    val valid = title.isNotBlank() &&
+        (duration.toIntOrNull() ?: 0) in 1..1440 &&
+        parsedExercises.isNotEmpty()
+
+    if (showExerciseCatalog) {
+        val selectedNames = parsedExercises.toSet()
+        ExerciseCatalogDialog(
+            initiallySelectedIds = com.openai.interactivefitness.domain.ExerciseCatalog.exercises
+                .filter { it.name in selectedNames }
+                .mapTo(mutableSetOf()) { it.id },
+            onConfirm = { selected ->
+                exercises = selected.joinToString("\n") { it.name }
+                plannedExercises = selected.map { definition ->
+                    plannedExercises.firstOrNull {
+                        it.exerciseId == definition.id
+                    } ?: PlannedExercise(
+                        exerciseId = definition.id,
+                        exerciseName = definition.name,
+                        sets = List(3) { PlannedSet(weightKg = 10.0, reps = 10) },
+                    )
+                }
+                showExerciseCatalog = false
+            },
+            onDismiss = { showExerciseCatalog = false },
+        )
+        return
+    }
+    editingExerciseId?.let { exerciseId ->
+        plannedExercises.firstOrNull { it.id == exerciseId }?.let { planned ->
+            ExerciseSetEditorDialog(
+                exercise = planned,
+                onSave = { updated ->
+                    plannedExercises = plannedExercises.map {
+                        if (it.id == updated.id) updated else it
+                    }
+                    editingExerciseId = null
+                },
+                onDismiss = { editingExerciseId = null },
+            )
+            return
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("커스텀 운동 계획") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (plans.isNotEmpty()) {
+                    Text("저장된 계획", style = MaterialTheme.typography.titleMedium)
+                    plans.forEach { plan ->
+                        Card {
+                            Column(
+                                Modifier.fillMaxWidth().padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text(plan.title, style = MaterialTheme.typography.titleSmall)
+                                Text("${plan.type.label} · ${plan.durationMinutes}분 · ${plan.exercises.size}단계")
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    TextButton(onClick = { onStart(plan) }) { Text("그대로 실행") }
+                                    TextButton(onClick = {
+                                        editingId = plan.id
+                                        title = plan.title
+                                        duration = plan.durationMinutes.toString()
+                                        type = plan.type
+                                        exercises = plan.exercises.joinToString("\n")
+                                        plannedExercises = if (plan.plannedExercises.isNotEmpty()) {
+                                            plan.plannedExercises
+                                        } else {
+                                            plan.exercises.map { name ->
+                                                val catalogItem = ExerciseCatalog.exercises
+                                                    .firstOrNull { it.name == name }
+                                                PlannedExercise(
+                                                    exerciseId = catalogItem?.id
+                                                        ?: "custom-${name.hashCode()}",
+                                                    exerciseName = name,
+                                                    sets = List(3) {
+                                                        PlannedSet(weightKg = 10.0, reps = 10)
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }) { Text("수정") }
+                                    TextButton(onClick = { onDelete(plan.id) }) { Text("삭제") }
+                                }
+                            }
+                        }
+                    }
+                    HorizontalDivider()
+                }
+                Text(if (editingId == null) "새 계획 만들기" else "계획 수정")
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("계획 이름") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    WorkoutType.entries.filterNot { it == WorkoutType.RECOVERY }.forEach { option ->
+                        FilterChip(
+                            selected = type == option,
+                            onClick = { type = option },
+                            label = { Text(option.label) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = duration,
+                    onValueChange = { duration = it.filter(Char::isDigit) },
+                    label = { Text("예상 시간(분)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    onClick = { showExerciseCatalog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (parsedExercises.isEmpty()) {
+                            "이미지로 운동 종목 선택"
+                        } else {
+                            "운동 종목 다시 선택 (${parsedExercises.size}개)"
+                        },
+                    )
+                }
+                plannedExercises.forEach { planned ->
+                    Card {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    planned.exerciseName,
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                                Text(
+                                    "${planned.sets.size}세트 · " +
+                                        "총 볼륨 ${
+                                            planned.sets.sumOf {
+                                                it.weightKg * it.reps
+                                            }.toInt()
+                                        }kg · 휴식 ${planned.restSeconds}초",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            TextButton(onClick = { editingExerciseId = planned.id }) {
+                                Text("세트 설정")
+                            }
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = exercises,
+                    onValueChange = { exercises = it },
+                    label = { Text("선택한 운동 종목") },
+                    minLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    enabled = valid,
+                    onClick = {
+                        val details = parsedExercises.map { name ->
+                            plannedExercises.firstOrNull { it.exerciseName == name }
+                                ?: PlannedExercise(
+                                    exerciseId = ExerciseCatalog.exercises
+                                        .firstOrNull { it.name == name }?.id
+                                        ?: "custom-${name.hashCode()}",
+                                    exerciseName = name,
+                                    sets = List(3) {
+                                        PlannedSet(weightKg = 10.0, reps = 10)
+                                    },
+                                )
+                        }
+                        onSave(
+                            CustomWorkoutPlan(
+                                id = editingId ?: java.util.UUID.randomUUID().toString(),
+                                title = title.trim(),
+                                type = type,
+                                durationMinutes = duration.toInt(),
+                                exercises = parsedExercises,
+                                plannedExercises = details,
+                            ),
+                        )
+                        editingId = null
+                        title = ""
+                        duration = "30"
+                        exercises = ""
+                        plannedExercises = emptyList()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(if (editingId == null) "계획 저장" else "수정 저장") }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
+    )
 }
 
 @Composable

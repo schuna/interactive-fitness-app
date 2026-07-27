@@ -10,8 +10,8 @@
     <string name="chat_more">더보기</string>
     <string name="chat_message_placeholder">메시지를 입력하세요</string>
     <string name="chat_send">메시지 보내기</string>
-    <string name="chat_action_today">오늘 운동</string>
-    <string name="chat_action_weight">웨이트 기록</string>
+    <string name="chat_action_today">추천 운동</string>
+    <string name="chat_action_weight">수동 기록 저장</string>
     <string name="chat_action_weekly">이번 주 분석</string>
     <string name="chat_action_history">기록 보기</string>
     <string name="chat_recommendation_ready">운동 기록을 분석해 추천을 준비하고 있어요.</string>

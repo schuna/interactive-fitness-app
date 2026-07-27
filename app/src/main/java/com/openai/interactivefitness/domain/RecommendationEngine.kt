@@ -6,6 +6,7 @@ class RecommendationEngine {
     fun recommend(
         history: List<WorkoutSession>,
         condition: DailyCondition,
+        customPlans: List<CustomWorkoutPlan> = emptyList(),
         today: LocalDate = LocalDate.now(),
     ): Recommendation {
         if (condition.hasPain) {
@@ -41,7 +42,28 @@ class RecommendationEngine {
             )
         }
 
-        return if (strengthCount <= cardioCount) {
+        val preferredType = if (strengthCount <= cardioCount) {
+            WorkoutType.STRENGTH
+        } else {
+            WorkoutType.RUNNING
+        }
+        customPlans
+            .filter { it.type == preferredType && it.durationMinutes <= condition.availableMinutes }
+            .maxByOrNull(CustomWorkoutPlan::durationMinutes)
+            ?.let { plan ->
+                return Recommendation(
+                    id = "custom-${plan.id}-$today",
+                    date = today,
+                    type = plan.type,
+                    title = plan.title,
+                    reason = "저장한 커스텀 운동 계획과 최근 운동 균형을 함께 반영했습니다.",
+                    durationMinutes = plan.durationMinutes,
+                    difficulty = "사용자 설정",
+                    exercises = plan.exercises,
+                )
+            }
+
+        return if (preferredType == WorkoutType.STRENGTH) {
             Recommendation(
                 id = "strength-$today",
                 date = today,

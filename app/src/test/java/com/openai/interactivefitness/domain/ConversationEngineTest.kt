@@ -13,9 +13,9 @@ class ConversationEngineTest {
     }
 
     @Test
-    fun workoutTextBecomesValidatedQuickLogIntent() {
+    fun workoutTextBecomesManualLogIntent() {
         assertEquals(
-            ConversationIntent.QuickLog(WorkoutType.RUNNING),
+            ConversationIntent.ManualLog,
             engine.interpret("러닝 기록 추가").intent,
         )
     }
@@ -71,8 +71,16 @@ class ConversationEngineTest {
             engine.interpret("이번 주 분석 보여줘").reply,
         )
         assertEquals(
-            "달리기 운동 기록을 직접 입력할까요?",
+            "운동 내용을 직접 입력해 저장할까요?",
             engine.interpret("러닝 기록 추가").reply,
+        )
+    }
+
+    @Test
+    fun customPlanPhraseOpensPlanManager() {
+        assertEquals(
+            ConversationIntent.CustomWorkoutPlan,
+            engine.interpret("나만의 운동 계획 만들기").intent,
         )
     }
 

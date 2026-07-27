@@ -2,13 +2,29 @@
 
 대화형 운동 기록 및 추천 Android 앱의 첫 번째 실행 가능한 골격입니다.
 
+## 재현 가능한 로컬 빌드
+
+Windows에서는 시스템 `JAVA_HOME`이나 사용자 Gradle 캐시에 의존하지 않고 다음 명령을 사용합니다.
+
+```powershell
+.\gradlew-local.bat testDebugUnitTest
+```
+
+프로젝트 내부 JDK가 없다면 한 번만 준비합니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap-jdk.ps1
+```
+
+JDK는 `.tools`, Gradle 캐시는 `.gradle-user`에 저장되며 Git에는 포함되지 않습니다.
+
 ## 현재 구현
 
 - Compose 기반 하단 내비게이션: 오늘, 대화, 대시보드, 기록
 - Fake Repository의 샘플 운동 기록
 - Room 기반 운동 기록 영속 저장
 - 피로도, 근육통, 통증을 반영하는 규칙 기반 추천
-- 추천 운동과 빠른 운동 기록 및 삭제 확인
+- 추천 운동, 커스텀 운동 계획, 수동 기록 저장 및 삭제 확인
 - 운동 종류, 제목, 시간, RPE, 상세 내용 입력 및 기존 기록 수정
 - 웨이트 세트별 종목, 중량, 반복 수와 RPE 기록
 - 달리기·사이클 인터벌별 시간, 거리와 메모 기록
