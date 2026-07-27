@@ -85,6 +85,9 @@ class GeminiIntentRouter {
         val prompt = """
             사용자의 한국어 문장을 분석해 가장 적절한 앱 함수 하나를 선택하세요.
             메뉴와 관련 없는 일반 대화라면 함수 호출 없이 짧게 답하세요.
+            "운동계획 보여줘", "운동 계획 보여줘", "저장계획 보여줘",
+            "저장 계획 보여줘"는 show_saved_custom_plans를 호출하세요.
+            "새 운동 계획 만들어줘"는 open_custom_plan_builder를 호출하세요.
             사용자 문장: $text
         """.trimIndent()
         val response = model.generateContent(prompt)

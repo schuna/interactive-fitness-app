@@ -47,6 +47,9 @@ class FirebaseSyncService private constructor(
     )
     val status: StateFlow<FirebaseSyncStatus> = mutableStatus.asStateFlow()
 
+    fun isGoogleSignedIn(): Boolean =
+        auth.currentUser?.let { !it.isAnonymous } == true
+
     init {
         if (auth.currentUser?.isAnonymous == true) auth.signOut()
     }

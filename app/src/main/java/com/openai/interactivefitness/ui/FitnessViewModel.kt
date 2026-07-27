@@ -128,6 +128,17 @@ class FitnessViewModel(
         )
     }
 
+    fun logAiRoutingFailure(error: Throwable) {
+        val entry = AppError(
+            code = "AI_INTENT_ROUTING_FAILED",
+            category = ErrorCategory.FIREBASE,
+            userMessage = "AI 의도 분석에 실패해 기기 내 분석으로 처리했습니다.",
+            operation = error::class.java.simpleName.ifBlank { "GeminiIntentRouter" },
+        )
+        errorLogStore.append(entry)
+        errorHistory.value = errorLogStore.load()
+    }
+
     fun startRecommendation() {
         if (uiState.value.isTodayRecommendationCompleted) {
             recordError(AppError(

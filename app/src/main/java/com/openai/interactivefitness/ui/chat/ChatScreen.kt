@@ -134,6 +134,7 @@ fun ChatScreen(
     conversationState: ChatConversationState,
     geminiIntentRouter: GeminiIntentRouter?,
     isGoogleSignedIn: Boolean,
+    onAiRoutingFailure: (Throwable) -> Unit,
     condition: DailyCondition,
     onFatigueChanged: (Int) -> Unit,
     onSorenessChanged: (Int) -> Unit,
@@ -259,7 +260,9 @@ fun ChatScreen(
         val localResult = conversationEngine.interpret(trimmed)
         if (shouldUseAiFirst(isGoogleSignedIn, geminiIntentRouter != null)) {
             coroutineScope.launch {
-                val aiResult = runCatching { geminiIntentRouter?.route(trimmed) }.getOrNull()
+                val aiResult = runCatching {
+                    geminiIntentRouter?.route(trimmed)
+                }.onFailure(onAiRoutingFailure).getOrNull()
                 if (aiResult == null) {
                     showResult(trimmed, localResult)
                 } else {
@@ -277,7 +280,9 @@ fun ChatScreen(
             return
         }
         coroutineScope.launch {
-            val aiResult = runCatching { geminiIntentRouter.route(trimmed) }.getOrNull()
+            val aiResult = runCatching {
+                geminiIntentRouter.route(trimmed)
+            }.onFailure(onAiRoutingFailure).getOrNull()
             if (aiResult == null) {
                 showResult(trimmed, localResult)
             } else {

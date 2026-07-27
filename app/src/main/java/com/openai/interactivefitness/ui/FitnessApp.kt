@@ -397,11 +397,14 @@ fun FitnessApp(
                 Destination.CHAT -> ChatScreen(
                     conversationState = chatConversationState,
                     geminiIntentRouter = application.geminiIntentRouter,
-                    isGoogleSignedIn = state.firebaseSyncStatus in setOf(
-                        com.openai.interactivefitness.data.FirebaseSyncStatus.READY,
-                        com.openai.interactivefitness.data.FirebaseSyncStatus.SYNCING,
-                        com.openai.interactivefitness.data.FirebaseSyncStatus.FAILED,
-                    ),
+                    isGoogleSignedIn =
+                        application.firebaseSyncService?.isGoogleSignedIn() == true ||
+                            state.firebaseSyncStatus in setOf(
+                                com.openai.interactivefitness.data.FirebaseSyncStatus.READY,
+                                com.openai.interactivefitness.data.FirebaseSyncStatus.SYNCING,
+                                com.openai.interactivefitness.data.FirebaseSyncStatus.FAILED,
+                            ),
+                    onAiRoutingFailure = viewModel::logAiRoutingFailure,
                     condition = state.condition,
                     onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
                     onSorenessChanged = { viewModel.updateCondition(soreness = it) },

@@ -22,6 +22,7 @@ data class ConversationResult(
 class ConversationEngine {
     fun interpret(text: String): ConversationResult {
         val normalized = text.trim().lowercase()
+        val compact = normalized.filter(Char::isLetterOrDigit)
         if (normalized.isBlank()) {
             return ConversationResult(
                 ConversationIntent.ShowMenu,
@@ -59,22 +60,29 @@ class ConversationEngine {
                     ConversationIntent.StartRecommendation,
                     "오늘의 추천 운동을 시작할까요?",
                 )
-            listOf("저장된 운동 계획", "저장 계획", "내 운동 계획", "계획 목록", "루틴 목록")
-                .any(normalized::contains) ->
-                ConversationResult(
-                    ConversationIntent.ShowCustomWorkoutPlans,
-                    "저장된 운동 계획을 확인할까요?",
-                )
             listOf(
-                "새 운동 계획",
-                "새 계획",
-                "나만의 계획",
-                "운동 계획 만들기",
-                "루틴 만들기",
-            ).any(normalized::contains) ->
+                "새운동계획",
+                "새계획",
+                "나만의계획",
+                "운동계획만들기",
+                "루틴만들기",
+            ).any(compact::contains) ->
                 ConversationResult(
                     ConversationIntent.CustomWorkoutPlan,
                     "새 운동 계획을 만들까요?",
+                )
+            listOf(
+                "저장된운동계획",
+                "저장계획",
+                "내운동계획",
+                "계획목록",
+                "루틴목록",
+                "운동계획보여",
+                "운동계획조회",
+            ).any(compact::contains) ->
+                ConversationResult(
+                    ConversationIntent.ShowCustomWorkoutPlans,
+                    "저장된 운동 계획을 확인할까요?",
                 )
             listOf("추천", "오늘 운동", "뭐 하지", "뭘 하지").any(normalized::contains) ->
                 ConversationResult(

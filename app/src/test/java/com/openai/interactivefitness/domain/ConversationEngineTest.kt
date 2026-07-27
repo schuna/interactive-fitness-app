@@ -97,6 +97,23 @@ class ConversationEngineTest {
     }
 
     @Test
+    fun savedPlanPhrasesIgnoreSpacesAndPunctuation() {
+        listOf(
+            "운동계획 보여줘",
+            "운동 계획 보여줘",
+            "저장계획 보여줘",
+            "저장 계획 보여줘",
+            "저장 계획, 보여줘!",
+        ).forEach { phrase ->
+            assertEquals(
+                "Failed phrase: $phrase",
+                ConversationIntent.ShowCustomWorkoutPlans,
+                engine.interpret(phrase).intent,
+            )
+        }
+    }
+
+    @Test
     fun conditionUpdatePhraseRequestsConditionEditor() {
         val result = engine.interpret("오늘 컨디션 업데이트하고 싶어")
 
