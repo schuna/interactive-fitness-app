@@ -92,7 +92,7 @@ class GeminiIntentRouter {
         runCatching { jsonPrimitive.content }.getOrElse { toString() }
 
     private companion object {
-        const val MODEL_NAME = "gemini-2.5-flash-lite"
+        const val MODEL_NAME = "gemini-3.5-flash-lite"
     }
 }
 
