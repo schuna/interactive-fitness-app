@@ -103,6 +103,8 @@ enum class ChatMessageAction {
 @Stable
 class ChatConversationState {
     val messages = mutableStateListOf<ChatMessage>()
+    var hasAnimatedGreeting by mutableStateOf(false)
+        private set
 
     fun addExchange(
         userText: String,
@@ -129,6 +131,10 @@ class ChatConversationState {
         if (index >= 0 && messages[index].animateTyping) {
             messages[index] = messages[index].copy(animateTyping = false)
         }
+    }
+
+    fun markGreetingTypingComplete() {
+        hasAnimatedGreeting = true
     }
 }
 
@@ -344,7 +350,15 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item {
-                ChatMessageBubble(ChatMessage(text = greeting, isUser = false))
+                ChatMessageBubble(
+                    message = ChatMessage(
+                        id = INITIAL_GREETING_MESSAGE_ID,
+                        text = greeting,
+                        isUser = false,
+                        animateTyping = !conversationState.hasAnimatedGreeting,
+                    ),
+                    onTypingComplete = conversationState::markGreetingTypingComplete,
+                )
             }
             if (showConditionEditor) item {
                 ChatConditionCard(
@@ -523,7 +537,9 @@ private fun ChatMessageBubble(
     val isTyping = message.animateTyping && visibleCharacters < message.text.length
 
     LaunchedEffect(message.id, message.text, message.animateTyping) {
-        if (!message.animateTyping || visibleCharacters >= message.text.length) {
+        if (!message.animateTyping) return@LaunchedEffect
+        if (visibleCharacters >= message.text.length) {
+            onTypingComplete()
             return@LaunchedEffect
         }
 
@@ -609,3 +625,4 @@ private fun ChatMessageBubble(
 
 private const val COACH_TYPING_DELAY_MILLIS = 24L
 private const val COACH_TYPING_CURSOR = "▌"
+private const val INITIAL_GREETING_MESSAGE_ID = "initial-coach-greeting"
