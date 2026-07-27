@@ -21,4 +21,16 @@ class GeminiIntentRouterTest {
     fun rejectsUnknownFunction() {
         assertNull(mapGeminiFunction("delete_all_workouts"))
     }
+
+    @Test
+    fun savedPlanListAndBuilderMapToDifferentIntents() {
+        assertEquals(
+            ConversationIntent.ShowCustomWorkoutPlans,
+            mapGeminiFunction("show_saved_custom_plans")?.intent,
+        )
+        assertEquals(
+            ConversationIntent.CustomWorkoutPlan,
+            mapGeminiFunction("open_custom_plan_builder")?.intent,
+        )
+    }
 }

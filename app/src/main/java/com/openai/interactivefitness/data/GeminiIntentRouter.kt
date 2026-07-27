@@ -55,6 +55,11 @@ class GeminiIntentRouter {
             optionalParameters = listOf("availableMinutes", "focus"),
         ),
         FunctionDeclaration(
+            "show_saved_custom_plans",
+            "저장된 커스텀 운동 계획 목록을 열어 다시 실행하거나 수정한다.",
+            emptyMap(),
+        ),
+        FunctionDeclaration(
             "open_custom_plan_builder",
             "운동 종목을 직접 선택하는 커스텀 운동 계획 화면을 연다.",
             mapOf(
@@ -125,6 +130,11 @@ internal fun mapGeminiFunction(
                 ConversationIntent.CustomWorkoutPlan,
                 parameters,
                 "운동 종목을 선택해 커스텀 계획을 만들까요?",
+            )
+            "show_saved_custom_plans" -> GeminiIntentResult(
+                ConversationIntent.ShowCustomWorkoutPlans,
+                parameters,
+                "저장된 운동 계획을 확인할까요?",
             )
             "update_daily_condition" -> GeminiIntentResult(
                 ConversationIntent.UpdateCondition,

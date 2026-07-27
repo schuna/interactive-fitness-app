@@ -90,6 +90,7 @@ enum class ChatMessageAction {
     UPDATE_CONDITION,
     SHOW_ACCOUNT_SETTINGS,
     MANUAL_LOG,
+    SAVED_CUSTOM_PLANS,
     CUSTOM_PLAN,
 }
 
@@ -132,6 +133,7 @@ private data class ChatQuickAction(
 fun ChatScreen(
     conversationState: ChatConversationState,
     geminiIntentRouter: GeminiIntentRouter?,
+    isGoogleSignedIn: Boolean,
     condition: DailyCondition,
     onFatigueChanged: (Int) -> Unit,
     onSorenessChanged: (Int) -> Unit,
@@ -139,7 +141,8 @@ fun ChatScreen(
     isConditionSubmittedToday: Boolean,
     onConditionSubmitted: (DailyCondition) -> Unit,
     onManualLog: (WorkoutType?) -> Unit,
-    onOpenCustomPlans: (CustomPlanPrefill) -> Unit,
+    onOpenSavedCustomPlans: () -> Unit,
+    onCreateCustomPlan: (CustomPlanPrefill) -> Unit,
     onStart: () -> Unit,
     isCompleted: Boolean,
     onOpenRecommendation: () -> Unit,
@@ -169,10 +172,16 @@ fun ChatScreen(
             listOf("오늘", "추천", "운동"),
         ),
         ChatQuickAction(
-            "커스텀 운동 계획",
-            "커스텀 운동 계획",
+            "저장된 운동 계획",
+            "저장된 운동 계획",
             Icons.Outlined.FitnessCenter,
-            listOf("커스텀", "계획", "루틴"),
+            listOf("저장", "계획", "목록", "루틴"),
+        ),
+        ChatQuickAction(
+            "새 운동 계획 만들기",
+            "새 운동 계획 만들기",
+            Icons.Outlined.FitnessCenter,
+            listOf("새", "만들기", "계획", "루틴"),
         ),
         ChatQuickAction(
             "수동 기록 저장",
@@ -221,6 +230,7 @@ fun ChatScreen(
             ConversationIntent.UpdateCondition -> ChatMessageAction.UPDATE_CONDITION
             ConversationIntent.ShowAccountSettings -> ChatMessageAction.SHOW_ACCOUNT_SETTINGS
             ConversationIntent.ManualLog -> ChatMessageAction.MANUAL_LOG
+            ConversationIntent.ShowCustomWorkoutPlans -> ChatMessageAction.SAVED_CUSTOM_PLANS
             ConversationIntent.CustomWorkoutPlan -> ChatMessageAction.CUSTOM_PLAN
             ConversationIntent.ShowMenu,
             is ConversationIntent.Unknown,
@@ -247,6 +257,21 @@ fun ChatScreen(
         focusManager.clearFocus()
         keyboardController?.hide()
         val localResult = conversationEngine.interpret(trimmed)
+        if (shouldUseAiFirst(isGoogleSignedIn, geminiIntentRouter != null)) {
+            coroutineScope.launch {
+                val aiResult = runCatching { geminiIntentRouter?.route(trimmed) }.getOrNull()
+                if (aiResult == null) {
+                    showResult(trimmed, localResult)
+                } else {
+                    showResult(
+                        trimmed,
+                        ConversationResult(intent = aiResult.intent, reply = aiResult.reply),
+                        aiResult.parameters,
+                    )
+                }
+            }
+            return
+        }
         if (localResult.intent !is ConversationIntent.Unknown || geminiIntentRouter == null) {
             showResult(trimmed, localResult)
             return
@@ -314,7 +339,8 @@ fun ChatScreen(
                     ChatMessageAction.SHOW_ACCOUNT_SETTINGS ->
                         stringResource(R.string.chat_action_open_account_settings)
                     ChatMessageAction.MANUAL_LOG -> "수동 기록 입력"
-                    ChatMessageAction.CUSTOM_PLAN -> "커스텀 계획 열기"
+                    ChatMessageAction.SAVED_CUSTOM_PLANS -> "저장된 계획 보기"
+                    ChatMessageAction.CUSTOM_PLAN -> "새 계획 만들기"
                     null -> null
                 }
                 ChatMessageBubble(
@@ -333,8 +359,10 @@ fun ChatScreen(
                             ChatMessageAction.SHOW_ACCOUNT_SETTINGS -> onOpenSettings()
                             ChatMessageAction.MANUAL_LOG ->
                                 onManualLog(message.parameters.workoutTypeOrNull())
+                            ChatMessageAction.SAVED_CUSTOM_PLANS ->
+                                onOpenSavedCustomPlans()
                             ChatMessageAction.CUSTOM_PLAN ->
-                                onOpenCustomPlans(message.parameters.customPlanPrefill())
+                                onCreateCustomPlan(message.parameters.customPlanPrefill())
                             null -> Unit
                         }
                     },
@@ -435,6 +463,11 @@ fun ChatScreen(
         }
     }
 }
+
+internal fun shouldUseAiFirst(
+    isGoogleSignedIn: Boolean,
+    hasGeminiIntentRouter: Boolean,
+): Boolean = isGoogleSignedIn && hasGeminiIntentRouter
 
 @Composable
 private fun ChatMessageBubble(

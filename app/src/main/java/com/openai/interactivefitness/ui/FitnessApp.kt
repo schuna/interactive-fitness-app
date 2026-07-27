@@ -130,6 +130,11 @@ private enum class Destination(
     SETTINGS("설정", Icons.Outlined.Settings),
 }
 
+private enum class CustomPlanDialogMode {
+    SAVED_PLANS,
+    CREATE,
+}
+
 @Composable
 fun FitnessApp(
     themeMode: ThemeMode,
@@ -202,6 +207,9 @@ fun FitnessApp(
     val chatConversationState = rememberChatConversationState()
     var showDiagnostics by remember { mutableStateOf(false) }
     var showCustomPlans by remember { mutableStateOf(false) }
+    var customPlanDialogMode by remember {
+        mutableStateOf(CustomPlanDialogMode.SAVED_PLANS)
+    }
     var customPlanPrefill by remember { mutableStateOf(CustomPlanPrefill()) }
     var pendingWorkoutDraftType by remember { mutableStateOf<WorkoutType?>(null) }
 
@@ -228,6 +236,7 @@ fun FitnessApp(
         CustomWorkoutPlansDialog(
             plans = state.customPlans,
             prefill = customPlanPrefill,
+            initialMode = customPlanDialogMode,
             onSave = viewModel::saveCustomPlan,
             onDelete = viewModel::deleteCustomPlan,
             onStart = {
@@ -381,12 +390,18 @@ fun FitnessApp(
                     onOpenHistory = { selected.value = Destination.HISTORY },
                     onOpenCustomPlans = {
                         customPlanPrefill = CustomPlanPrefill()
+                        customPlanDialogMode = CustomPlanDialogMode.SAVED_PLANS
                         showCustomPlans = true
                     },
                 )
                 Destination.CHAT -> ChatScreen(
                     conversationState = chatConversationState,
                     geminiIntentRouter = application.geminiIntentRouter,
+                    isGoogleSignedIn = state.firebaseSyncStatus in setOf(
+                        com.openai.interactivefitness.data.FirebaseSyncStatus.READY,
+                        com.openai.interactivefitness.data.FirebaseSyncStatus.SYNCING,
+                        com.openai.interactivefitness.data.FirebaseSyncStatus.FAILED,
+                    ),
                     condition = state.condition,
                     onFatigueChanged = { viewModel.updateCondition(fatigue = it) },
                     onSorenessChanged = { viewModel.updateCondition(soreness = it) },
@@ -405,8 +420,14 @@ fun FitnessApp(
                         pendingWorkoutDraftType = type ?: WorkoutType.STRENGTH
                         selected.value = Destination.HISTORY
                     },
-                    onOpenCustomPlans = { prefill ->
+                    onOpenSavedCustomPlans = {
+                        customPlanPrefill = CustomPlanPrefill()
+                        customPlanDialogMode = CustomPlanDialogMode.SAVED_PLANS
+                        showCustomPlans = true
+                    },
+                    onCreateCustomPlan = { prefill ->
                         customPlanPrefill = prefill
+                        customPlanDialogMode = CustomPlanDialogMode.CREATE
                         showCustomPlans = true
                     },
                     onStart = viewModel::startRecommendation,
@@ -630,11 +651,15 @@ private fun TodayScreen(
 private fun CustomWorkoutPlansDialog(
     plans: List<CustomWorkoutPlan>,
     prefill: CustomPlanPrefill,
+    initialMode: CustomPlanDialogMode,
     onSave: (CustomWorkoutPlan) -> Unit,
     onDelete: (String) -> Unit,
     onStart: (CustomWorkoutPlan) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var showEditor by remember(initialMode) {
+        mutableStateOf(initialMode == CustomPlanDialogMode.CREATE)
+    }
     var editingId by remember { mutableStateOf<String?>(null) }
     var title by remember { mutableStateOf("") }
     var duration by remember(prefill.durationMinutes) {
@@ -697,14 +722,26 @@ private fun CustomWorkoutPlansDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("커스텀 운동 계획") },
+        title = {
+            Text(
+                if (showEditor) {
+                    if (editingId == null) "새 운동 계획 만들기" else "운동 계획 수정"
+                } else {
+                    "저장된 운동 계획"
+                },
+            )
+        },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (plans.isNotEmpty()) {
-                    Text("저장된 계획", style = MaterialTheme.typography.titleMedium)
+                if (!showEditor) {
+                    if (plans.isEmpty()) {
+                        Text(
+                            "저장된 계획이 없습니다. 하단의 ‘새 운동 계획 만들기’ 메뉴에서 계획을 생성해 주세요.",
+                        )
+                    }
                     plans.forEach { plan ->
                         Card {
                             Column(
@@ -717,6 +754,7 @@ private fun CustomWorkoutPlansDialog(
                                     TextButton(onClick = { onStart(plan) }) { Text("그대로 실행") }
                                     TextButton(onClick = {
                                         editingId = plan.id
+                                        showEditor = true
                                         title = plan.title
                                         duration = plan.durationMinutes.toString()
                                         type = plan.type
@@ -743,9 +781,8 @@ private fun CustomWorkoutPlansDialog(
                             }
                         }
                     }
-                    HorizontalDivider()
-                }
-                Text(if (editingId == null) "새 계획 만들기" else "계획 수정")
+                } else {
+                Text(if (editingId == null) "운동 계획 정보" else "저장된 계획 수정")
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
@@ -845,9 +882,11 @@ private fun CustomWorkoutPlansDialog(
                         duration = "30"
                         exercises = ""
                         plannedExercises = emptyList()
+                        onDismiss()
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(if (editingId == null) "계획 저장" else "수정 저장") }
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },

@@ -9,6 +9,7 @@ sealed interface ConversationIntent {
     data object UpdateCondition : ConversationIntent
     data object ShowAccountSettings : ConversationIntent
     data object ManualLog : ConversationIntent
+    data object ShowCustomWorkoutPlans : ConversationIntent
     data object CustomWorkoutPlan : ConversationIntent
     data class Unknown(val originalText: String) : ConversationIntent
 }
@@ -32,7 +33,7 @@ class ConversationEngine {
             normalized in setOf("메뉴", "도움말", "도움", "뭘 할 수 있어?", "뭘 할 수 있어") ->
                 ConversationResult(
                     ConversationIntent.ShowMenu,
-                    "추천 운동, 커스텀 운동 계획, 수동 기록 저장, 기록 보기, 주간 분석을 이용할 수 있어요.",
+                    "추천 운동, 저장된 운동 계획, 새 운동 계획 만들기, 수동 기록 저장, 기록 보기, 주간 분석을 이용할 수 있어요.",
                 )
             normalized.contains("컨디션 업데이트") ||
                 normalized.contains("컨디션 갱신") ||
@@ -58,10 +59,22 @@ class ConversationEngine {
                     ConversationIntent.StartRecommendation,
                     "오늘의 추천 운동을 시작할까요?",
                 )
-            listOf("커스텀", "나만의 계획", "운동 계획 만들기", "루틴 만들기").any(normalized::contains) ->
+            listOf("저장된 운동 계획", "저장 계획", "내 운동 계획", "계획 목록", "루틴 목록")
+                .any(normalized::contains) ->
+                ConversationResult(
+                    ConversationIntent.ShowCustomWorkoutPlans,
+                    "저장된 운동 계획을 확인할까요?",
+                )
+            listOf(
+                "새 운동 계획",
+                "새 계획",
+                "나만의 계획",
+                "운동 계획 만들기",
+                "루틴 만들기",
+            ).any(normalized::contains) ->
                 ConversationResult(
                     ConversationIntent.CustomWorkoutPlan,
-                    "커스텀 운동 계획을 만들거나 저장된 계획을 실행할까요?",
+                    "새 운동 계획을 만들까요?",
                 )
             listOf("추천", "오늘 운동", "뭐 하지", "뭘 하지").any(normalized::contains) ->
                 ConversationResult(

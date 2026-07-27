@@ -60,7 +60,7 @@ class FitnessAppSmokeTest {
 
         input.assertIsNotFocused()
         composeRule.onNodeWithText(
-            "추천 운동, 커스텀 운동 계획, 수동 기록 저장, 기록 보기, 주간 분석을 이용할 수 있어요.",
+            "추천 운동, 저장된 운동 계획, 새 운동 계획 만들기, 수동 기록 저장, 기록 보기, 주간 분석을 이용할 수 있어요.",
         ).assertIsDisplayed()
     }
 
@@ -73,7 +73,7 @@ class FitnessAppSmokeTest {
         }
 
         composeRule.onAllNodesWithText(
-            "추천 운동, 커스텀 운동 계획, 수동 기록 저장, 기록 보기, 주간 분석을 이용할 수 있어요.",
+            "추천 운동, 저장된 운동 계획, 새 운동 계획 만들기, 수동 기록 저장, 기록 보기, 주간 분석을 이용할 수 있어요.",
         ).assertCountEquals(2)
     }
 
@@ -99,6 +99,22 @@ class FitnessAppSmokeTest {
         composeRule.onNodeWithText("추천 운동 보기").assertIsDisplayed().performClick()
 
         composeRule.onNodeWithText("추천 운동").assertIsDisplayed()
+    }
+
+    @Test
+    fun savedPlansAndNewPlanOpenDifferentMenus() {
+        composeRule.onNodeWithText("저장된 운동 계획").performClick()
+        composeRule.onNodeWithText("저장된 계획 보기").performClick()
+        composeRule.onNodeWithText(
+            "저장된 계획이 없습니다. 하단의 ‘새 운동 계획 만들기’ 메뉴에서 계획을 생성해 주세요.",
+        ).assertIsDisplayed()
+        composeRule.onNodeWithText("계획 이름").assertDoesNotExist()
+        composeRule.onNodeWithText("닫기").performClick()
+
+        composeRule.onNodeWithText("새 운동 계획 만들기").performClick()
+        composeRule.onNodeWithText("새 계획 만들기").performClick()
+        composeRule.onNodeWithText("운동 계획 정보").assertIsDisplayed()
+        composeRule.onNodeWithText("계획 이름").assertIsDisplayed()
     }
 
     @Test

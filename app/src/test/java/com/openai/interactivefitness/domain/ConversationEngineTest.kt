@@ -85,6 +85,18 @@ class ConversationEngineTest {
     }
 
     @Test
+    fun savedPlansAndNewPlanUseDifferentIntents() {
+        assertEquals(
+            ConversationIntent.ShowCustomWorkoutPlans,
+            engine.interpret("저장된 운동 계획 보여줘").intent,
+        )
+        assertEquals(
+            ConversationIntent.CustomWorkoutPlan,
+            engine.interpret("새 운동 계획 만들기").intent,
+        )
+    }
+
+    @Test
     fun conditionUpdatePhraseRequestsConditionEditor() {
         val result = engine.interpret("오늘 컨디션 업데이트하고 싶어")
 
